@@ -72,6 +72,9 @@ No gradients for decoration.
   The playhead is 1.5 px `--glow-hi`. "Notes in tune" shows before (mono `--ink-2`) → after (mono `--glow-hi`).
 - **Layer row**: one line per layer. Fixed widths: name 118, voice 176, source 160, numbers 74. Inset 3 px amber accent
   (`--cue` for the guitar/backing row). Muted or not-soloed rows drop to 55% opacity.
+- **Sound card** (`.sound-tile`, Effects gallery): a button on `--inset` with a `--wire` border and 10 radius, 12/14 padding,
+  name 14/600, "best for" 12 `--ink-2`, settings line 11 mono `--ink-4` pinned to the bottom. Chosen: `--glow` border, inset
+  ring and `--glow-wash` background. Suggested: a small amber-outline pill badge top right. Grid `minmax(210px, 1fr)`, 8 gap.
 - **Toast** `--rack-hi`, inset 3 px `--live` (or `--rec` for errors), fades up 6 px in 220 ms.
 - **Modal** (tuner) `--desk`, 18 radius, scale .97→1 in 200 ms.
 

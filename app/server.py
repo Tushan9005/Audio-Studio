@@ -123,6 +123,12 @@ def layer_stem(fid: str, request: Request):
     return FileResponse(ops.layer_stem(fid, q.get("shift"), q.get("voice") or "fixed", _tune_params(q), q.get("seed")), media_type="audio/wav")
 
 
+@app.get("/api/fx_suggest/{fid}")
+def fx_suggest(fid: str):
+    """Which Instagram cover preset suits this recording (tone balance and dynamics), with the reason."""
+    return ops.fx_suggest(fid)
+
+
 # ── tune (pitch correction) ──
 @app.get("/api/tune/info/{fid}")
 def tune_info(fid: str):

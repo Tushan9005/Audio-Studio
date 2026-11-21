@@ -262,24 +262,97 @@ def extract_audio(fid):
 
 
 # ═════════════ EFFECTS ═════════════
+# Presets. "group": cover = the Instagram acoustic-cover sounds shown first; other = the rest. "best" is shown on
+# the card. Values are on the sliders' own steps so the screen shows exactly what is applied. Natural and Intimate
+# keep the exact values the owner listened to and liked (earlier sliders rounded 1.45 s / 58 % / +1.5 dB etc.).
 PRESETS = {
-    "cover_natural": {"label": "★ Instagram acoustic cover — natural", "highpass": 65, "deess": 1, "mud": -2.5,
-                      "presence": 2, "treble": 1.5, "comp": 2, "reverb": 14, "room": 1.45,
-                      "predelay": 22, "reverb_tone": 58, "width": 0.5, "loud": "-14"},
-    "cover_intimate": {"label": "Instagram acoustic cover — intimate", "highpass": 70, "deess": 1, "mud": -2,
-                       "presence": 2.5, "treble": 1, "comp": 2, "reverb": 9, "room": 0.9,
+    "cover_natural": {"label": "Natural", "group": "cover", "best": "Most covers: clear words, warm guitar and a believable room.",
+                      "highpass": 70, "deess": 1, "mud": -2.5, "presence": 2, "treble": 2, "comp": 2, "reverb": 14, "room": 1.5,
+                      "predelay": 22, "reverb_tone": 60, "width": 0.5, "loud": "-14"},
+    "cover_intimate": {"label": "Intimate", "group": "cover", "best": "Soft, close songs: as if you are singing next to the listener.",
+                       "highpass": 70, "deess": 1, "mud": -2, "presence": 3, "treble": 1, "comp": 2, "reverb": 9, "room": 0.9,
                        "predelay": 18, "reverb_tone": 65, "width": 0.5, "loud": "-14"},
-    "cover_spacious": {"label": "Instagram acoustic cover — spacious", "highpass": 60, "deess": 1, "mud": -2,
-                       "presence": 2, "treble": 1, "comp": 2, "reverb": 23, "room": 2.2,
+    "cover_spacious": {"label": "Spacious", "group": "cover", "best": "Slow songs with long held notes.",
+                       "highpass": 60, "deess": 1, "mud": -2, "presence": 2, "treble": 1, "comp": 2, "reverb": 23, "room": 2.2,
                        "predelay": 35, "reverb_tone": 50, "width": 1, "loud": "-14"},
-    "vocal": {"label": "Vocal polish", "highpass": 80, "deess": 1, "comp": 3, "presence": 3, "reverb": 15, "room": 1.2, "loud": "-14"},
-    "guitar": {"label": "Warm acoustic guitar", "highpass": 50, "bass": 2, "mud": -1.5, "treble": 1, "comp": 2, "reverb": 16, "room": 1.5, "predelay": 16, "reverb_tone": 55, "loud": "-14"},
-    "cleanup": {"label": "Clean up a phone recording", "noise": 10, "hum": 1, "highpass": 70, "mud": -2, "comp": 1, "loud": "-16"},
-    "lofi": {"label": "Lo-fi", "lofi": 1, "reverb": 10, "room": 1.0},
-    "radio": {"label": "Old radio", "radio": 1},
-    "bass": {"label": "Bass boost", "bass": 6, "loud": "-14"},
-    "hall": {"label": "Big hall reverb", "reverb": 35, "room": 3.2},
+    "cover_bright": {"label": "Bright & crisp", "group": "cover", "best": "Recordings that sound muffled or boomy (a phone close to the guitar).",
+                     "highpass": 80, "deess": 1, "mud": -3.5, "presence": 3.5, "treble": 3, "comp": 2, "reverb": 12, "room": 1.3,
+                     "predelay": 20, "reverb_tone": 65, "width": 0.5, "loud": "-14"},
+    "cover_warm": {"label": "Warm & cosy", "group": "cover", "best": "Thin or harsh recordings, and romantic evening songs.",
+                   "highpass": 55, "deess": 1, "bass": 2, "mud": -1.5, "presence": 1, "treble": -1, "comp": 2, "reverb": 13, "room": 1.4,
+                   "predelay": 20, "reverb_tone": 45, "width": 0.5, "loud": "-14"},
+    "cover_studio": {"label": "Studio vocal", "group": "cover", "best": "When your voice should sit clearly on top of the guitar.",
+                     "highpass": 80, "deess": 1, "mud": -3, "presence": 3, "treble": 1.5, "comp": 3, "reverb": 10, "room": 1.1,
+                     "predelay": 30, "reverb_tone": 60, "width": 0.5, "loud": "-14"},
+    "cover_punchy": {"label": "Punchy for Reels", "group": "cover", "best": "Upbeat songs: stays strong on phone speakers.",
+                     "highpass": 75, "deess": 1, "bass": 1, "mud": -2, "presence": 2.5, "treble": 2, "comp": 3.5, "reverb": 8, "room": 0.9,
+                     "predelay": 15, "reverb_tone": 60, "width": 0.5, "loud": "-14"},
+    "cover_soft": {"label": "Soft & close", "group": "cover", "best": "Very soft singing: brings quiet words forward.",
+                   "highpass": 70, "deess": 1, "mud": -1.5, "presence": 1.5, "treble": 1.5, "comp": 3.5, "reverb": 7, "room": 0.8,
+                   "predelay": 15, "reverb_tone": 60, "width": 0.5, "loud": "-14"},
+    "cover_unplugged": {"label": "Live unplugged", "group": "cover", "best": "Feels like a small live room session.",
+                        "highpass": 60, "mud": -1.5, "presence": 1.5, "treble": 1, "comp": 1.5, "reverb": 20, "room": 1.8,
+                        "predelay": 12, "reverb_tone": 50, "width": 1, "loud": "-14"},
+    "cover_dreamy": {"label": "Dreamy", "group": "cover", "best": "Slow, emotional songs: soft and floating, with a gentle echo.",
+                     "highpass": 70, "deess": 1, "mud": -2, "presence": 1, "treble": 1, "comp": 2, "reverb": 28, "room": 2.6,
+                     "predelay": 40, "reverb_tone": 45, "echo": 12, "echo_ms": 380, "width": 1.5, "loud": "-14"},
+    "cover_concert": {"label": "Concert hall", "group": "cover", "best": "Big devotional or classical-style songs.",
+                      "highpass": 60, "presence": 1.5, "comp": 2, "reverb": 30, "room": 3.2, "predelay": 30, "reverb_tone": 55,
+                      "width": 1, "loud": "-14"},
+    "cover_rescue": {"label": "Phone recording rescue", "group": "cover", "best": "When you can hear fan noise, electric hum or an echoey room.",
+                     "noise": 8, "hum": 1, "highpass": 85, "deess": 1, "mud": -3.5, "presence": 3, "treble": 2, "comp": 2.5,
+                     "reverb": 8, "room": 1.0, "predelay": 15, "reverb_tone": 60, "loud": "-14"},
+    "vocal": {"label": "Vocal polish", "group": "other", "best": "A voice on its own (no guitar).", "highpass": 80, "deess": 1, "comp": 3, "presence": 3, "reverb": 15, "room": 1.2, "loud": "-14"},
+    "guitar": {"label": "Warm acoustic guitar", "group": "other", "best": "A guitar on its own.", "highpass": 50, "bass": 2, "mud": -1.5, "treble": 1, "comp": 2, "reverb": 16, "room": 1.5, "predelay": 16, "reverb_tone": 55, "loud": "-14"},
+    "cleanup": {"label": "Clean up only", "group": "other", "best": "Speech or a rough take: just noise, hum and boom removed.", "noise": 10, "hum": 1, "highpass": 70, "mud": -2, "comp": 1, "loud": "-16"},
+    "lofi": {"label": "Lo-fi", "group": "other", "best": "An old, crunchy, nostalgic effect.", "lofi": 1, "reverb": 10, "room": 1.0},
+    "radio": {"label": "Old radio", "group": "other", "best": "A telephone / old-radio effect.", "radio": 1},
+    "bass": {"label": "Bass boost", "group": "other", "best": "More low end for music played on big speakers.", "bass": 6, "loud": "-14"},
+    "hall": {"label": "Big hall reverb", "group": "other", "best": "Only a big reverb, nothing else changed.", "reverb": 35, "room": 3.2},
 }
+
+
+def fx_suggest(fid):
+    """Suggests a cover preset from how the recording sounds (tone balance and dynamics). Noise and hum are not
+    judged: on continuous music they can't be measured reliably, so "Phone recording rescue" is a choice by ear."""
+    it = need(get(fid), "audio", "video")
+    if not it["has_audio"]:
+        raise MediaError("This video has no sound.")
+    sr = 22050
+    tmp = os.path.join(TMP, "sg-%s.raw" % secrets.token_hex(4))
+    try:
+        run(["-i", path_of(it), "-t", "120", "-vn", "-ac", "1", "-ar", str(sr), "-f", "f32le", tmp])
+        y = np.fromfile(tmp, dtype=np.float32)
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
+    if len(y) < sr * 3:
+        return {"key": "cover_natural", "reason": "Natural is the best starting point for most covers."}
+    n = 4096
+    P = np.zeros(n // 2 + 1)
+    for s in range(0, len(y) - n, n):
+        P += np.abs(np.fft.rfft(y[s:s + n] * np.hanning(n))) ** 2
+    f = np.fft.rfftfreq(n, 1 / sr)
+    band = lambda lo, hi: float(P[(f >= lo) & (f < hi)].sum())
+    tot = band(80, 10000) + 1e-12
+    boom, pres, air = band(150, 500) / tot, band(2000, 5000) / tot, band(5000, 10000) / tot
+    clarity = band(5000, 10000) / (band(2000, 5000) + 1e-12)   # air vs presence: low = muffled
+    fr = int(0.05 * sr)
+    db = 20 * np.log10(np.array([np.sqrt((y[i:i + fr] ** 2).mean()) for i in range(0, len(y) - fr, fr)]) + 1e-9)
+    act = db[db > db.max() - 45]
+    spread = float(np.percentile(act, 95) - np.percentile(act, 10)) if len(act) > 10 else 0
+    m = {"boom": round(boom, 3), "presence": round(pres, 4), "clarity": round(clarity, 3), "spread_db": round(spread, 1)}
+    if boom > 0.55 and clarity < 0.2:
+        return {"key": "cover_bright", "metrics": m, "reason": "Your recording sounds boomy and a little muffled, which is typical for a phone close to the guitar. Bright & crisp clears the boom and brings your words forward."}
+    if boom > 0.55:
+        return {"key": "cover_studio", "metrics": m, "reason": "Your recording has a lot of low, boomy sound. Studio vocal cuts it and lifts your voice above the guitar."}
+    if clarity < 0.15:
+        return {"key": "cover_bright", "metrics": m, "reason": "Your recording sounds a little muffled. Bright & crisp adds clarity and air."}
+    if clarity > 0.8 or pres > 0.25:
+        return {"key": "cover_warm", "metrics": m, "reason": "Your recording sounds bright or thin. Warm & cosy smooths it and adds body."}
+    if spread > 20:
+        return {"key": "cover_soft", "metrics": m, "reason": "Some parts are much quieter than others. Soft & close evens them out so quiet words aren't lost."}
+    return {"key": "cover_natural", "metrics": m, "reason": "Your recording is well balanced. Natural keeps it that way and adds a believable room."}
 
 
 def _impulse(seconds, path, predelay_ms=20, brightness=55):

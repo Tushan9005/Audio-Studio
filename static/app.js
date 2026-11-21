@@ -174,7 +174,7 @@
       S.ticks = S.ticks.filter(byId);
       if (!$('vVoice').options.length) {
         Object.keys(j.voices).forEach(function (k) { $('vVoice').add(new Option(j.voices[k], k)); });
-        Object.keys(j.presets).forEach(function (k) { $('preset').add(new Option(j.presets[k], k)); });
+        renderSoundGrid();
       }
       drawList(); fillMusic();
       if (selectId) select(selectId);
@@ -333,6 +333,7 @@
     $('lpPreview').disabled = !hasSound;
     refreshTune(f);
     renderJobs();
+    if (!document.querySelector('[data-p="fx"]').hidden) loadSuggestion(); else markSuggested();
   }
   // The whole file is always framed by two draggable handles. A frame that still covers the whole
   // file counts as "nothing selected", so Play plays everything and Trim asks you to drag first.
@@ -941,6 +942,7 @@
     document.querySelectorAll('.tabs button').forEach(function (x) { x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
     document.querySelectorAll('.panel').forEach(function (p) { p.hidden = p.getAttribute('data-p') !== b.getAttribute('data-t'); });
     if (b.getAttribute('data-t') === 'tune') drawTuneGraph();
+    if (b.getAttribute('data-t') === 'fx') loadSuggestion();
   });
 
   // ── sliders show their values ──
@@ -965,30 +967,73 @@
     });
     scheduleFxPreview();
   }
-  $('fxReset').addEventListener('click', function () { fxReset(); $('preset').value = ''; });
-  $('preset').addEventListener('change', function () {
-    var p = S.presets[this.value]; if (!p) return;
+  $('fxReset').addEventListener('click', function () { fxReset(); setFxChosen(null); });
+  // ── sound gallery: Instagram cover sounds first, with a suggestion for the selected recording ──
+  var fxChosen = null, fxChosenName = '', fxEdited = false, fxSuggestCache = {};
+  function presetMeta(p) {
+    var bits = [];
+    if (p.reverb) bits.push('Reverb ' + p.reverb + '%'); else bits.push('No reverb');
+    if (p.comp) bits.push('Compression ' + p.comp);
+    if (p.echo) bits.push('Echo');
+    if (p.noise || p.hum) bits.push('Noise & hum cleanup');
+    return bits.join(' · ');
+  }
+  function renderSoundGrid() {
+    var tile = function (k) {
+      var p = S.presets[k];
+      return '<button type="button" role="listitem" class="sound-tile" data-preset="' + k + '" aria-pressed="false">' +
+        '<span class="st-name">' + esc(p.label) + '</span><span class="st-best">' + esc(p.best || '') + '</span>' +
+        '<span class="st-meta">' + esc(presetMeta(p)) + '</span></button>';
+    };
+    var keys = Object.keys(S.presets);
+    $('soundGrid').innerHTML = keys.filter(function (k) { return S.presets[k].group === 'cover'; }).map(tile).join('');
+    $('soundGridOther').innerHTML = keys.filter(function (k) { return S.presets[k].group !== 'cover'; }).map(tile).join('');
+    markSuggested();
+  }
+  function setFxChosen(key, name) {
+    fxChosen = key; fxEdited = false; fxChosenName = name || (key && S.presets[key] ? S.presets[key].label : '');
+    document.querySelectorAll('.sound-tile').forEach(function (t) { var on = t.getAttribute('data-preset') === key; t.classList.toggle('chosen', on); t.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+    $('fxCurrent').textContent = fxChosenName || 'None chosen';
+    $('fxCurrentNote').textContent = fxChosenName ? (key ? 'ready to apply' : 'your preset') : 'pick one below';
+  }
+  function markFxEdited() {   // you moved a slider after picking a sound
+    if (!fxChosenName || fxEdited) return;
+    fxEdited = true; $('fxCurrentNote').textContent = 'changed by you';
+  }
+  function applyPreset(key) {
+    var p = S.presets[key]; if (!p) return;
     fxReset();
     Object.keys(p).forEach(function (k) {
       var el = document.querySelector('[data-fx="' + k + '"]'); if (!el) return;
       if (el.type === 'checkbox') el.checked = !!p[k]; else el.value = p[k];
       if (el.type === 'range') outFor(el);
     });
+    setFxChosen(key);
+    $('coverHelp').textContent = p.label + ': ' + (p.best || '') + (S.fxPreview ? '' : ' Turn on Live preview to hear it.');
+    $('myPreset').value = '';
     scheduleFxPreview();
+  }
+  ['soundGrid', 'soundGridOther'].forEach(function (id) {
+    $(id).addEventListener('click', function (e) { var t = e.target.closest('[data-preset]'); if (t) applyPreset(t.getAttribute('data-preset')); });
   });
-  var coverHelp = {
-    cover_natural: 'Natural keeps the words clear, warms the guitar and adds a believable room around you.',
-    cover_intimate: 'Intimate sounds close to the listener, with just enough space to avoid sounding dry.',
-    cover_spacious: 'Spacious gives sustained notes a wider, longer tail while keeping the first word clear.'
-  };
-  document.querySelector('[data-p="fx"] .cover-choices').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-cover-preset]'); if (!b) return;
-    var key = b.getAttribute('data-cover-preset'); $('preset').value = key;
-    $('preset').dispatchEvent(new Event('change'));
-    document.querySelectorAll('[data-cover-preset]').forEach(function (x) { x.classList.toggle('chosen', x === b); });
-    $('coverHelp').textContent = coverHelp[key];
-    toast('“' + b.textContent.trim().replace(/\s+/g, ' ') + '” settings loaded. Click Apply effects when ready.');
-  });
+  function markSuggested() {
+    var sg = S.cur && fxSuggestCache[S.cur];
+    document.querySelectorAll('.sound-tile').forEach(function (t) {
+      var on = !!sg && t.getAttribute('data-preset') === sg.key;
+      t.classList.toggle('suggested', on);
+      var badge = t.querySelector('.st-badge');
+      if (on && !badge) t.insertAdjacentHTML('afterbegin', '<span class="st-badge">Suggested</span>');
+      if (!on && badge) badge.remove();
+    });
+    $('fxSuggest').hidden = !sg;
+    if (sg && S.presets[sg.key]) $('fxSuggest').innerHTML = '<b>Suggested for this recording: ' + esc(S.presets[sg.key].label) + '.</b> ' + esc(sg.reason) + ' <span>This is based on how your recording sounds; trust your ears too.</span>';
+  }
+  function loadSuggestion() {
+    var f = curFile();
+    if (!f || !(f.kind === 'audio' || (f.kind === 'video' && f.has_audio))) { markSuggested(); return; }
+    if (fxSuggestCache[f.id]) { markSuggested(); return; }
+    api('/api/fx_suggest/' + f.id).then(function (j) { fxSuggestCache[f.id] = j; if (S.cur === f.id) markSuggested(); }).catch(function () {});
+  }
   function fxValues() {
     var o = {};
     document.querySelectorAll('[data-fx]').forEach(function (el) { o[el.getAttribute('data-fx')] = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value; });
@@ -997,20 +1042,20 @@
   var personalSounds = {};
   try { var savedSounds = JSON.parse(localStorage.getItem('audioStudio.personalSounds') || '{}'); if (savedSounds && typeof savedSounds === 'object' && !Array.isArray(savedSounds)) personalSounds = savedSounds; } catch (e) {}
   function listPersonalSounds() {
-    $('myPreset').replaceChildren(new Option('Choose a saved sound…', ''));
+    $('myPreset').replaceChildren(new Option('Choose one of your presets…', ''));
     Object.keys(personalSounds).sort().forEach(function (name) { $('myPreset').add(new Option(name, name)); });
   }
   function persistSounds(next) {
     try { localStorage.setItem('audioStudio.personalSounds', JSON.stringify(next)); personalSounds = next; listPersonalSounds(); return true; }
-    catch (e) { toast('This browser could not save your sounds. Check available browser storage.', true); return false; }
+    catch (e) { toast('This browser could not save your presets. Check available browser storage.', true); return false; }
   }
   listPersonalSounds();
   $('saveMyPreset').addEventListener('click', function () {
-    var name = prompt('Name this sound (for example: My warm acoustic cover)');
+    var name = prompt('Name your preset (for example: My cover sound). It saves only the slider settings, not audio.', fxChosenName ? fxChosenName + (fxEdited ? ' (mine)' : '') : '');
     if (!name || !name.trim()) return; name = name.trim().slice(0, 80);
-    if (Object.prototype.hasOwnProperty.call(personalSounds, name) && !confirm('Replace the saved sound “' + name + '”?')) return;
+    if (Object.prototype.hasOwnProperty.call(personalSounds, name) && !confirm('Replace your preset “' + name + '”?')) return;
     var next = Object.assign(Object.create(null), personalSounds); next[name] = fxValues();
-    if (persistSounds(next)) { $('myPreset').value = name; toast('Sound saved in this browser.'); }
+    if (persistSounds(next)) { $('myPreset').value = name; setFxChosen(null, name); toast('Preset “' + name + '” saved. Pick it from My presets any time.'); }
   });
   $('myPreset').addEventListener('change', function () {
     var settings = personalSounds[this.value]; if (!settings || typeof settings !== 'object') return;
@@ -1020,13 +1065,13 @@
       if (el.type === 'checkbox') el.checked = !!Number(value); else el.value = value;
       if (el.type === 'range') outFor(el);
     });
-    $('preset').value = '';
-    document.querySelectorAll('[data-cover-preset]').forEach(function (b) { b.classList.remove('chosen'); });
-    $('coverHelp').textContent = 'Personal sound: ' + this.value;
+    setFxChosen(null, this.value);
+    $('coverHelp').textContent = 'Your preset: ' + this.value + '.';
     scheduleFxPreview();
   });
   $('deleteMyPreset').addEventListener('click', function () {
-    var name = $('myPreset').value; if (!name || !confirm('Delete saved sound “' + name + '”?')) return;
+    var name = $('myPreset').value; if (!name) { toast('Choose one of your presets first.', true); return; }
+    if (!confirm('Delete your preset “' + name + '”?')) return;
     var next = Object.assign(Object.create(null), personalSounds); delete next[name]; persistSounds(next);
   });
   $('fxBypass').addEventListener('click', function () {
@@ -1151,7 +1196,7 @@
       if (!S.ws.isPlaying()) S.ws.play();
     } catch (e) { stopFxPreview(); toast('Live preview could not start in this browser. Reload the page and try again.', true); }
   });
-  document.querySelectorAll('[data-fx]').forEach(function (el) { el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', scheduleFxPreview); });
+  document.querySelectorAll('[data-fx]').forEach(function (el) { el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', function () { markFxEdited(); scheduleFxPreview(); }); });
 
   // ── run a tool ──
   var MSG = { effects: 'Applying effects…', effects_video: 'Polishing the sound and rebuilding your video…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',

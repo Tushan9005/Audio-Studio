@@ -204,9 +204,6 @@ input[type=range] { accent-color: var(--glow); width: 100%; margin: 6px 0; curso
 .personal-presets select { min-width: 220px; }
 #fxBypass[aria-pressed="true"] { border-color: var(--cue); color: var(--cue); }
 #fxPreview.on { background: rgba(103, 196, 138, .14); border-color: rgba(103, 196, 138, .55); color: #c9f0d6; }
-.fx-optionsbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; padding: 8px 8px 8px 16px; border: 1px solid var(--wire); border-radius: var(--r-md); }
-.fx-optionsbar .cover-help { margin: 0; color: var(--ink-2); font-size: 12.5px; }
-.fx-optionsbar .presets label { flex-direction: row; align-items: center; gap: 8px; min-width: 0; }
 .grid.fx { grid-template-columns: repeat(3, minmax(240px, 1fr)); align-items: start; }
 .grid.fx .card h3 { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
 
@@ -365,3 +362,29 @@ option { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) { .job-bar.indet i { animation: none; transform: none; } }
 @keyframes sp { to { transform: rotate(360deg); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* ── effects: sound gallery ── */
+.fx-current { display: flex; flex-direction: column; gap: 2px; }
+.fx-current b { font: 600 16px/1.2 var(--display); color: var(--glow-hi); }
+.fx-current span { font-size: 11.5px; color: var(--ink-3); }
+.sounds-card { margin-bottom: 12px; gap: 14px; }
+.sounds-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.sounds-head .note { margin-top: 4px; max-width: 760px; }
+.suggest { margin: 0; padding: 10px 14px; border-radius: var(--r-md); background: var(--glow-wash); border: 1px solid var(--glow-line); color: var(--ink-2); font-size: 13px; }
+.suggest b { color: var(--ink); }
+.suggest span { color: var(--ink-3); }
+.sound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.sound-tile { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; min-height: 96px; text-align: left; cursor: pointer;
+  background: var(--inset); border: 1px solid var(--wire); border-radius: var(--r-md); color: var(--ink); transition: border-color .15s, background-color .15s, transform .12s var(--ease); }
+.sound-tile:hover { border-color: var(--wire-3); background: #14110e; }
+.sound-tile:active { transform: scale(.98); }
+.sound-tile.chosen { border-color: var(--glow); background: var(--glow-wash); box-shadow: inset 0 0 0 1px var(--glow); }
+.st-name { font-weight: 600; font-size: 14px; }
+.st-best { font-size: 12px; color: var(--ink-2); line-height: 1.4; }
+.st-meta { margin-top: auto; padding-top: 4px; font: 11px var(--mono); color: var(--ink-4); }
+.sound-tile.chosen .st-meta { color: var(--ink-3); }
+.st-badge { position: absolute; top: 10px; right: 10px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--glow-line); color: var(--glow-hi); font-size: 10.5px; font-weight: 700; letter-spacing: .02em; }
+.sound-tile.suggested .st-name { padding-right: 78px; }
+.other-sounds summary { cursor: pointer; color: var(--ink-3); font-size: 12.5px; padding: 2px 0; }
+.other-sounds summary:hover { color: var(--ink); }
+.other-sounds[open] summary { margin-bottom: 10px; }

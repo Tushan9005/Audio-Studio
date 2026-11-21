@@ -195,3 +195,16 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   The Analyse and Split buttons show their job's progress while you stay on that file.
 - Watch out: `document.querySelector('.cover-choices')` matched the Tune tab's buttons once Tune existed and silently
   broke the Effects quick sounds. Scope lookups to their panel (`[data-p="fx"] .cover-choices`).
+
+## Effects: sound gallery, suggestion, My presets (21 Nov 2026)
+- `ops.PRESETS` now carry `group` ("cover" = 12 Instagram acoustic-cover sounds shown first, "other" = 7 more) and
+  `best` (the card text). The page builds the cards from `/api/files` → `preset_values` (`renderSoundGrid`).
+- Slider steps: EQ and compression 0.5, low cut 5. The old whole-number steps silently rounded preset values
+  (treble 1.5 → 2, low cut 65 → 70, tone 58 → 60, room 1.45 → 1.5). Natural and Intimate now store exactly
+  those rounded values, because that's the sound the owner heard and liked. Keep new preset values on the slider steps.
+- `GET /api/fx_suggest/<id>` → `ops.fx_suggest`: tone balance (boom 150–500 Hz share, clarity = 5–10 kHz vs 2–5 kHz,
+  presence share) and loudness spread decide Bright & crisp / Studio vocal / Warm & cosy / Soft & close / Natural.
+  Calibrated on the owner's recording (boom 0.66, clarity 0.10, so Bright & crisp). Noise and hum are NOT judged:
+  on continuous music they couldn't be measured (added hiss didn't move the numbers; "hum" was guitar notes).
+- "My sounds" renamed **My presets** ("Save as my preset"): they store slider settings only (localStorage key
+  `audioStudio.personalSounds`, unchanged so saved presets survive). The bar shows the chosen sound and "changed by you".
