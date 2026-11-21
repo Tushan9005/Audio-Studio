@@ -140,7 +140,7 @@
   function showStage() { $('empty').hidden = !!S.cur; $('stage').hidden = !S.cur; }
   function select(id) {
     var f = byId(id); if (!f) return;
-    stopFxPreview();
+    stopFxPreview(); stopLayerPreview();
     S.cur = id; showStage(); drawList();
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
@@ -183,6 +183,7 @@
     fxButton.disabled = !hasSound;
     fxButton.textContent = f.kind === 'video' ? 'Polish video sound → new MP4' : 'Apply effects → new copy';
     $('fxPreview').disabled = !hasSound;
+    $('lpPreview').disabled = f.kind !== 'audio';
   }
   // The whole file is always framed by two draggable handles. A frame that still covers the whole
   // file counts as "nothing selected", so Play plays everything and Trim asks you to drag first.
@@ -336,7 +337,7 @@
     row.innerHTML = '<label>Part<input class="layer-name" value="' + esc(name) + '"></label><label>Source<select data-layer="source"><option value="">Selected lead</option></select></label>' +
       [['shift','Pitch (semitones)',-12,12,shift,1],['db','Level (dB)',-36,6,db,1],['pan','Pan (−1 left / +1 right)',-1,1,pan,.1],['delay','Start offset (ms)',0,5000,0,10]].map(function (v) { return '<label>' + v[1] + '<input type="number" data-layer="' + v[0] + '" min="' + v[2] + '" max="' + v[3] + '" value="' + v[4] + '" step="' + v[5] + '"></label>'; }).join('') + '<label class="tick"><input type="checkbox" data-layer="mute">Mute</label><label class="tick"><input type="checkbox" data-layer="solo">Solo</label><button class="btn ghost" type="button">Remove</button>';
     S.files.filter(function (f) { return f.kind === 'audio'; }).forEach(function (f) { row.querySelector('select').add(new Option(f.name, f.id)); });
-    row.querySelector('button').onclick = function () { row.remove(); };
+    row.querySelector('button').onclick = function () { row.remove(); scheduleLayerPreview(); };
     $('layerTracks').appendChild(row);
     row.querySelector('[data-layer="delay"]').value = delay || 0;
   }
@@ -353,13 +354,149 @@
   Object.keys(layerArrangements).forEach(function (key) { $('layerPreset').add(new Option(layerArrangements[key].name, key)); });
   $('layerPreset').onchange = function () { $('layerPresetHelp').textContent = 'Selected preset: ' + layerArrangements[this.value].help + ' Click Load arrangement to apply.'; };
   $('layerPreset').onchange();
-  $('layerAdd').onclick = function () { addVocalLayer('Harmony', 0, -9, 0); };
+
+  // ── vocal layers: live preview ──
+  // The server makes each layer's pitch-shifted voice with the SAME ffmpeg chain as the final render
+  // (/api/layer_stem, cached), so the preview is the real harmony, not an approximation. The browser then
+  // mixes the layers in sync with the waveform player: level, pan, start offset, mute and solo use the same
+  // maths as the render (dB → gain, equal-power pan, delay) and change instantly while it plays.
+  var LP = null, lpTimer = null;
+  function layerRows() {
+    var rows = Array.from($('layerTracks').children).map(function (row) {
+      var v = function (k) { return row.querySelector('[data-layer="' + k + '"]'); };
+      var num = function (k, lo, hi, d) { var x = Number(v(k).value); return isFinite(x) && v(k).value !== '' ? Math.max(lo, Math.min(hi, x)) : d; };
+      var src = v('source').value || S.cur, shift = Math.round(num('shift', -12, 12, 0) * 100) / 100;
+      return { row: row, src: src, shift: shift, key: src + '|' + shift.toFixed(2), db: num('db', -36, 6, -6), pan: num('pan', -1, 1, 0),
+               delay: num('delay', 0, 5000, 0) / 1000, mute: v('mute').checked, solo: v('solo').checked };
+    });
+    var solo = rows.some(function (r) { return r.solo; });
+    rows.forEach(function (r) { r.audible = !r.mute && (!solo || r.solo); });
+    return rows;
+  }
+  function lpMediaDirect(on) {   // the selected file's own sound: off while the layers play, on for "Hear original"
+    var media = LP.media, fxs = fxSources.get(media);
+    media.muted = !on;
+    if (fxs) { try { fxs.disconnect(); } catch (e) {} if (on) fxs.connect(LP.ac.destination); }
+  }
+  function lpParams(v, r) {
+    var t = LP.ac.currentTime;
+    v.gain.gain.setTargetAtTime(r.audible ? Math.pow(10, r.db / 20) : 0, t, 0.015);
+    v.pan.pan.setTargetAtTime(r.pan, t, 0.015);
+    v.delay.delayTime.setValueAtTime(r.delay, t);
+    r.row.classList.toggle('silent', !r.audible);
+  }
+  function lpVoice(r, pos) {
+    var buf = LP.bufs[r.key]; if (!(buf instanceof AudioBuffer) || pos >= buf.duration) return null;
+    var ac = LP.ac, v = { row: r.row, key: r.key, src: ac.createBufferSource(), gain: ac.createGain(), pan: ac.createStereoPanner(), delay: ac.createDelay(5.1) };
+    v.src.buffer = buf; v.src.connect(v.gain); v.gain.connect(v.pan); v.pan.connect(v.delay); v.delay.connect(LP.bus);
+    v.gain.gain.value = 0; lpParams(v, r);
+    v.src.start(0, Math.max(0, pos));
+    return v;
+  }
+  function lpKill(v) { try { v.src.stop(); } catch (e) {} [v.src, v.gain, v.pan, v.delay].forEach(function (n) { try { n.disconnect(); } catch (e) {} }); }
+  function lpHalt() { if (!LP) return; LP.voices.forEach(lpKill); LP.voices = []; LP.playing = false; }
+  function lpPlay() {   // (re)start every layer at the player's position
+    if (!LP) return; lpHalt();
+    var pos = LP.media.currentTime; LP.t0 = LP.ac.currentTime - pos; LP.playing = true;
+    layerRows().forEach(function (r) { var v = lpVoice(r, pos); if (v) LP.voices.push(v); });
+  }
+  function lpLoad(r) {
+    LP.bufs[r.key] = 'loading';
+    var lp = LP;
+    fetch('/api/layer_stem/' + encodeURIComponent(r.src) + '?shift=' + r.shift)
+      .then(function (res) { if (!res.ok) return res.json().then(function (j) { throw new Error(j.error || 'Could not prepare that layer.'); }); return res.arrayBuffer(); })
+      .then(function (ab) { return lp.ac.decodeAudioData(ab); })
+      .then(function (buf) { if (LP !== lp) return; lp.bufs[r.key] = buf; syncLayerPreview(); })
+      .catch(function (e) { if (LP !== lp) return; delete lp.bufs[r.key]; toast(e.message, true); syncLayerPreview(); });
+  }
+  function syncLayerPreview() {
+    if (!LP) return;
+    var rows = layerRows(), waiting = [];
+    rows.forEach(function (r) {
+      var b = LP.bufs[r.key];
+      if (!b) lpLoad(r);
+      if (!(LP.bufs[r.key] instanceof AudioBuffer)) waiting.push(r);
+      r.row.classList.toggle('loading', !(LP.bufs[r.key] instanceof AudioBuffer));
+    });
+    $('layersEmpty').hidden = rows.length > 0;
+    if (!LP.bypass) $('lpNote').textContent = !rows.length ? 'LIVE · add or load layers to hear them.' :
+      waiting.length ? 'LIVE · preparing ' + waiting.map(function (r) { return (r.shift > 0 ? '+' : '') + r.shift + ' semitones'; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ') + '…' :
+      'LIVE · change pitch, level, pan, offset, mute or solo while it plays.';
+    if (!LP.playing) return;
+    var pos = LP.ac.currentTime - LP.t0, keep = [];
+    LP.voices.forEach(function (v) {
+      var r = rows.filter(function (x) { return x.row === v.row; })[0];
+      if (r && r.key === v.key) { lpParams(v, r); keep.push(v); } else lpKill(v);
+    });
+    rows.forEach(function (r) {
+      if (keep.some(function (v) { return v.row === r.row; })) return;
+      var v = lpVoice(r, pos); if (v) keep.push(v);
+    });
+    LP.voices = keep;
+  }
+  function scheduleLayerPreview() {
+    $('layersEmpty').hidden = $('layerTracks').children.length > 0;
+    if (!LP) return; clearTimeout(lpTimer); lpTimer = setTimeout(syncLayerPreview, 120);
+  }
+  function stopLayerPreview() {
+    clearTimeout(lpTimer);
+    if (!LP) return;
+    var lp = LP;
+    lpHalt(); clearInterval(lp.drift);
+    lp.listeners.forEach(function (x) { lp.media.removeEventListener(x[0], x[1]); });
+    try { lp.bus.disconnect(); lp.limiter.disconnect(); } catch (e) {}
+    lpMediaDirect(true); lp.media.muted = lp.prevMuted;
+    Array.from($('layerTracks').children).forEach(function (row) { row.classList.remove('loading', 'silent'); });
+    LP = null;
+    $('lpPreview').classList.remove('on'); $('lpPreview').textContent = '▶ Live preview';
+    $('lpBypass').disabled = true; $('lpBypass').setAttribute('aria-pressed', 'false'); $('lpBypass').textContent = 'Hear original';
+    $('lpNote').textContent = 'Live preview plays all layers together while you adjust them.';
+  }
+  $('lpPreview').addEventListener('click', function () {
+    if (LP) { stopLayerPreview(); return; }
+    var f = curFile();
+    if (!f || f.kind !== 'audio' || !S.ws || !S.ws.getMediaElement) { toast('Select a vocals-only sound file first.', true); return; }
+    if (!$('layerTracks').children.length) { toast('Load an arrangement or add a layer first.', true); return; }
+    stopFxPreview();
+    try {
+      if (!fxAudioContext) fxAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      var ac = fxAudioContext, media = S.ws.getMediaElement();
+      if (S.rate !== 1) { S.rate = 1; applyRate(); toast('Layer preview plays at normal speed.'); }
+      var bus = ac.createGain(), lim = ac.createDynamicsCompressor();   // like the render's limiter
+      lim.threshold.value = -0.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
+      bus.connect(lim); lim.connect(ac.destination);
+      LP = { ac: ac, media: media, bus: bus, limiter: lim, bufs: {}, voices: [], playing: false, t0: 0, bypass: false, prevMuted: media.muted, listeners: [] };
+      var on = function (ev, fn) { media.addEventListener(ev, fn); LP.listeners.push([ev, fn]); };
+      on('play', lpPlay); on('pause', lpHalt); on('ended', lpHalt);
+      on('seeked', function () { if (!media.paused) lpPlay(); });
+      LP.drift = setInterval(function () {   // keep the layers locked to the player
+        if (LP && LP.playing && !media.paused && Math.abs(LP.ac.currentTime - LP.t0 - media.currentTime) > 0.15) lpPlay();   // seeks and loops re-sync at once via "seeked"
+      }, 400);
+      lpMediaDirect(false); ac.resume();
+      this.classList.add('on'); this.textContent = '■ Stop preview'; $('lpBypass').disabled = false;
+      syncLayerPreview();
+      if (media.paused) S.ws.play(); else lpPlay();
+    } catch (e) { stopLayerPreview(); toast('Live preview could not start in this browser. Reload the page and try again.', true); }
+  });
+  $('lpBypass').addEventListener('click', function () {
+    if (!LP) return;
+    LP.bypass = !LP.bypass;
+    LP.bus.gain.setTargetAtTime(LP.bypass ? 0 : 1, LP.ac.currentTime, 0.01);
+    lpMediaDirect(LP.bypass);
+    this.setAttribute('aria-pressed', LP.bypass ? 'true' : 'false'); this.textContent = LP.bypass ? 'Hear layers' : 'Hear original';
+    $('lpNote').textContent = LP.bypass ? 'ORIGINAL · the selected file on its own, for comparison.' : 'LIVE · change pitch, level, pan, offset, mute or solo while it plays.';
+    if (!LP.bypass) syncLayerPreview();
+  });
+  $('layerTracks').addEventListener('input', scheduleLayerPreview);
+  $('layerTracks').addEventListener('change', scheduleLayerPreview);
+  $('layerAdd').onclick = function () { addVocalLayer('Harmony', 0, -9, 0); scheduleLayerPreview(); };
   $('layerStack').onclick = function () {
     if ($('layerTracks').children.length && !confirm('Replace the current layer arrangement?')) return;
     $('layerTracks').replaceChildren();
     var preset = layerArrangements[$('layerPreset').value];
     preset.tracks.forEach(function (v) { addVocalLayer.apply(null,v); });
     $('layerPresetHelp').textContent = 'Loaded: ' + preset.name + '. ' + preset.help;
+    scheduleLayerPreview();
   };
   document.querySelector('.tabs').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-t]'); if (!b) return;
@@ -562,6 +699,7 @@
   }
   $('fxPreview').addEventListener('click', function () {
     if (S.fxPreview) { stopFxPreview(); return; }
+    stopLayerPreview();
     if (!S.ws || !S.ws.getMediaElement) { toast('Select an audio file or a video with sound first.', true); return; }
     var media = S.ws.getMediaElement();
     try {
@@ -591,7 +729,7 @@
       var solo = tracks.some(function (t) { return t.solo; });
       body.layers = tracks.filter(function (t) { return !t.mute && (!solo || t.solo); });
       if (!body.layers.length) { toast('Add at least one audible layer.', true); return; }
-      stopFxPreview();
+      stopFxPreview(); stopLayerPreview();
     }
     if (a === 'trim' || a === 'cut') {
       var s = parseFloat($('selS').value), en = parseFloat($('selE').value);

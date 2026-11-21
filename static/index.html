@@ -158,14 +158,31 @@
 
       <!-- VOCAL LAYERS -->
       <div class="panel" data-p="layers" hidden>
-        <div class="card">
-          <h3>Arrange your vocal layers</h3>
-          <p class="note">1. Select a vocals-only audio file in the library. 2. Add harmonies or choose separately recorded parts. 3. Render the mix, listen, then use Effects for reverb and Edit → Save as to export.</p>
-          <div class="row"><label>Arrangement preset<select id="layerPreset"></select></label><button class="btn" id="layerStack" type="button">Load arrangement</button><button class="btn" id="layerAdd" type="button">Add layer</button><button class="btn primary" data-do="vocal_layers">Render vocal mix</button></div>
-          <p class="note" id="layerPresetHelp" aria-live="polite"></p>
-          <p class="note">These are starting settings inspired by common production techniques, not artist presets. Use your original vocal as the source. Artificial doubles use delayed copies: check the mix in mono for a hollow or phasey sound. Separate sung takes usually sound more natural.</p>
-          <p class="note">Fixed pitch intervals: +3 minor third, +4 major third, +7 fifth, −12 octave bass. These do not automatically follow your key or chords and can change vocal character. For descending lines, record the melody separately and choose it as a source. Mute excludes a layer; Solo includes only soloed layers.</p>
+        <section class="fx-commandbar" aria-label="Vocal layer controls">
+          <div class="fx-command-copy">
+            <span class="fx-eyebrow">Vocal layers</span>
+            <strong>Harmonies &amp; doubles</strong>
+            <p id="lpNote">Live preview plays all layers together while you adjust them.</p>
+          </div>
+          <div class="fx-command-presets">
+            <span class="fx-group-label">Arrangement</span>
+            <div class="layer-preset-row"><select id="layerPreset" aria-label="Arrangement preset"></select><button class="btn" id="layerStack" type="button">Load</button></div>
+          </div>
+          <div class="fx-actions">
+            <button class="btn" id="lpBypass" type="button" disabled aria-pressed="false" title="Hear the selected file on its own">Hear original</button>
+            <button class="btn big" id="lpPreview" type="button">▶ Live preview</button>
+            <button class="btn primary big" data-do="vocal_layers">Render vocal mix</button>
+          </div>
+        </section>
+        <div class="card layers-card">
+          <div class="layers-head"><p class="note" id="layerPresetHelp" aria-live="polite"></p><button class="btn" id="layerAdd" type="button">+ Add layer</button></div>
           <div id="layerTracks"></div>
+          <p class="layers-empty" id="layersEmpty">No layers yet. Pick an arrangement above and press <b>Load</b>, or add a layer.</p>
+          <details class="tips"><summary>How layers work &amp; tips</summary>
+            <p class="note">1. Select a vocals-only audio file in the library (Split song in Practice can make one). 2. Load an arrangement or add layers, then press Live preview and adjust while it plays. 3. Render the mix, then use Effects for reverb and Edit → Save as to export.</p>
+            <p class="note">These are starting settings based on common production techniques, not copies of any artist's sound. Artificial doubles are delayed copies, so check that the mix doesn't sound hollow or phasey. Separately sung takes usually sound more natural: choose them as a layer's Source.</p>
+            <p class="note">Fixed pitch intervals: +3 minor third, +4 major third, +7 fifth, −12 octave below. They don't follow your key or chords automatically, so solo a harmony to check it. Mute leaves a layer out; Solo plays only the soloed layers.</p>
+          </details>
         </div>
       </div>
 

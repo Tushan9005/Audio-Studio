@@ -73,6 +73,44 @@ def _audio_out(item, filters, suffix, extra_inputs=(), complex_graph=None, op=""
 
 
 # ═════════════ EDIT ═════════════
+def _layer_shift(v):
+    return round(num(v, -12, 12, 0), 2)
+
+
+def _layer_chain(shift):
+    """Mono + pitch shift for one vocal layer. Shared by the final render and the live-preview stems, so what
+    you hear in the preview is the exact same pitch-shifted voice that ends up in the mix."""
+    # The sample format is pinned (float) at every step: otherwise ffmpeg picks atempo's format from whatever
+    # comes after it (mono 16-bit preview file vs stereo mix), and atempo then splices at different points,
+    # so preview and render would differ.
+    ratio = 2 ** (shift / 12)
+    fmt = "aformat=sample_fmts=flt:sample_rates=%d:channel_layouts=mono" % SR
+    chain = "aresample=%d,%s,asetpts=PTS-STARTPTS" % (SR, fmt)
+    if ratio != 1:
+        chain += ",asetrate=%.6f,aresample=%d,aformat=sample_fmts=flt:channel_layouts=mono,%s,%s" % (SR * ratio, SR, _tempo_chain(1 / ratio), fmt)
+    return chain
+
+
+def layer_stem(fid, shift):
+    """One layer's voice (mono, pitch-shifted) for the browser's live preview; cached in workspace/tmp."""
+    import time
+    it = need(get(fid), "audio")
+    s = _layer_shift(shift)
+    path = os.path.join(TMP, "layer-%s-%+.2f.wav" % (it["id"], s))
+    if not os.path.isfile(path):
+        for old in os.listdir(TMP):   # tidy previews older than a day
+            if old.startswith("layer-"):
+                try:
+                    if time.time() - os.path.getmtime(os.path.join(TMP, old)) > 86400:
+                        os.remove(os.path.join(TMP, old))
+                except OSError:
+                    pass
+        part = path + ".part.wav"
+        run(["-i", path_of(it), "-vn", "-af", _layer_chain(s), "-ar", str(SR), "-ac", "1", "-c:a", "pcm_s16le", part])
+        os.replace(part, path)
+    return path
+
+
 def vocal_layers(fid, layers):
     lead = need(get(fid), "audio")
     if not isinstance(layers, list) or not 1 <= len(layers) <= 8:
@@ -83,13 +121,10 @@ def vocal_layers(fid, layers):
             raise MediaError("Invalid layer.")
         source = need(get(layer.get("source") or fid), "audio")
         args += ["-i", path_of(source)]
-        ratio = 2 ** (num(layer.get("shift"), -12, 12, 0) / 12)
         gain = _lin(num(layer.get("db"), -36, 6, -6))
         pan = num(layer.get("pan"), -1, 1, 0)
         delay = int(num(layer.get("delay"), 0, 5000, 0))
-        chain = "aresample=44100,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS"
-        if ratio != 1:
-            chain += ",asetrate=%.6f,aresample=44100,%s" % (SR * ratio, _tempo_chain(1 / ratio))
+        chain = _layer_chain(_layer_shift(layer.get("shift")))
         chain += ",volume=%.8f,pan=stereo|c0=%.8f*c0|c1=%.8f*c0,adelay=%d|%d" % (gain, math.cos((pan+1)*math.pi/4), math.sin((pan+1)*math.pi/4), delay, delay)
         graph.append("[%d:a]%s[v%d]" % (i, chain, i))
         outputs.append("[v%d]" % i)

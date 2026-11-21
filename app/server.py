@@ -112,6 +112,12 @@ def download(fid: str):
     return FileResponse(media.path_of(it), filename="%s.%s" % (it["name"], it["ext"]))
 
 
+@app.get("/api/layer_stem/{fid}")
+def layer_stem(fid: str, shift: float = 0):
+    """A vocal layer's pitch-shifted voice for the live preview (same ffmpeg chain as the final render)."""
+    return FileResponse(ops.layer_stem(fid, shift), media_type="audio/wav")
+
+
 # ── tools ──
 @app.post("/api/do/{action}")
 async def do(action: str, request: Request):

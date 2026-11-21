@@ -138,3 +138,17 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   Counters update live on `region-update`. Nudge ±0.1 s, "At playhead", and keys `[` / `]` set start/end.
   The old From/To inputs are kept under "Type exact times" (opened automatically for videos without sound).
 - `fmt()` now rounds before formatting (9.96 s used to show as "0:010.0").
+
+## Vocal layers live preview (21 Nov 2026)
+- Vocal layers has the same command bar as Effects: Hear original · Live preview · Render vocal mix.
+- How it works: `GET /api/layer_stem/{fid}?shift=` → `ops.layer_stem` makes one layer's mono, pitch-shifted voice
+  with `_layer_chain()`, the **same** function the render uses (cached as `tmp\layer-<id>-<shift>.wav`, files older
+  than a day are tidied). The browser (`LP` in app.js) decodes the stems and plays them with AudioBufferSourceNodes,
+  locked to the muted wavesurfer media element (restart on play/seeked, re-sync if drift > 150 ms). Level (dB→gain),
+  equal-power StereoPanner, DelayNode offset, mute and solo update live. A pitch change fetches a new stem.
+- `_layer_chain()` pins `sample_fmts=flt` around asetrate/atempo. Without it, ffmpeg picked atempo's format from the
+  output (mono s16 stem vs stereo mix) and the two splice differently. Verified: preview vs render agree to 16-bit
+  rounding for 0, ±12, +3, +4, +7 and the full arrangements (doubles −41 dB because adelay rounds to whole ms).
+  The render also lags 219 samples behind its input because of alimiter's 5 ms look-ahead (same for every layer,
+  inaudible).
+- The layers preview forces 100 % speed, and starting either preview (Effects or Layers) stops the other.
