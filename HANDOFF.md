@@ -85,6 +85,11 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   The browser preview impulse (`makePreviewImpulse`) uses the same unit-energy scaling so preview = saved
   file. Cached impulses are `tmp\ir-v3-*.wav` (v2 files were scaled the old way). Always measure the
   tail in the gaps after clicks when changing reverb code; listening to the preview alone is not enough.
+- Review follow-ups: the reverb impulse has no 0 ms spike any more (only early reflections from 13 ms), so it
+  never adds a delayed copy of the dry sound; cached impulses are `tmp\ir-v4-*.wav`. Hum notches are Q 30
+  (hum still -56 to -87 dB; low G 98 Hz loses 2.3 dB instead of 10.4 with the old Q 8). "Clean up a phone
+  recording" has hum removal again and no reverb. Preview compressor uses the server's make-up (1 + 0.6·c)
+  and knee 2.83 dB; the preview still has no loudnorm, so saved files with a Loudness setting differ in level.
 - Added a 280 Hz boxiness/mud control. Cover presets use gentle EQ/compression and -14 LUFS mastering.
 - Noise reduction now tracks a conservative -50 dB steady noise floor rather than using the previous aggressive
   fixed -30 dB floor. Cover presets keep it off and never use a noise gate, protecting quiet guitar sustain.

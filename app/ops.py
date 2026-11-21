@@ -211,7 +211,7 @@ PRESETS = {
                        "predelay": 35, "reverb_tone": 50, "width": 1, "loud": "-14"},
     "vocal": {"label": "Vocal polish", "highpass": 80, "deess": 1, "comp": 3, "presence": 3, "reverb": 15, "room": 1.2, "loud": "-14"},
     "guitar": {"label": "Warm acoustic guitar", "highpass": 50, "bass": 2, "mud": -1.5, "treble": 1, "comp": 2, "reverb": 16, "room": 1.5, "predelay": 16, "reverb_tone": 55, "loud": "-14"},
-    "cleanup": {"label": "Clean up a phone recording", "noise": 10, "highpass": 70, "mud": -2, "comp": 1, "reverb": 8, "room": 0.9, "predelay": 15, "reverb_tone": 60, "loud": "-16"},
+    "cleanup": {"label": "Clean up a phone recording", "noise": 10, "hum": 1, "highpass": 70, "mud": -2, "comp": 1, "loud": "-16"},
     "lofi": {"label": "Lo-fi", "lofi": 1, "reverb": 10, "room": 1.0},
     "radio": {"label": "Old radio", "radio": 1},
     "bass": {"label": "Bass boost", "bass": 6, "loud": "-14"},
@@ -241,7 +241,9 @@ def _impulse(seconds, path, predelay_ms=20, brightness=55):
     noise = np.column_stack((noise[:, 0] + noise[:, 1] * .16, noise[:, 1] + noise[:, 0] * .12))
     ir = np.zeros((n, 2), dtype=np.float64)
     ir[pre:] = noise * env[:, None] * fade[:, None] * .16
-    for ms, gl, gr in ((0, .72, .68), (13, .38, .20), (23, .18, .34), (37, .25, .15), (53, .12, .22), (79, .12, .08)):
+    # early reflections only: a full-level 0 ms spike here would put a delayed copy of the dry sound in
+    # the wet path and make the voice sound doubled/slapback instead of in a room
+    for ms, gl, gr in ((13, .38, .20), (23, .18, .34), (37, .25, .15), (53, .12, .22), (79, .12, .08)):
         k = pre + int(SR * ms / 1000)
         if k < n:
             ir[k, 0] += gl; ir[min(n - 1, k + 31), 1] += gr
@@ -262,7 +264,8 @@ def effects(fid, p):
         # starting floor helps preserve guitar sustain and breaths between sung phrases.
         f.append("afftdn=nr=%.1f:nf=-50:tn=1:tr=1" % num(p["noise"], 1, 40, 10)); label.append("steady hiss reduced")
     if p.get("hum"):
-        f += ["bandreject=f=50:width_type=q:w=8", "bandreject=f=100:width_type=q:w=8", "bandreject=f=150:width_type=q:w=8"]; label.append("hum removed")
+        # Narrow notches (Q 30, ~3 Hz wide at 100 Hz) so the low G string (98 Hz) and A (110 Hz) keep their body
+        f += ["bandreject=f=%d:width_type=q:w=30" % hz for hz in (50, 100, 150)]; label.append("hum removed")
     hp = num(p.get("highpass"), 0, 300, 0)
     if hp >= 20:
         f.append("highpass=f=%d" % hp)
@@ -312,7 +315,7 @@ def effects(fid, p):
         room = num(p.get("room"), 0.3, 6, 1.5)
         predelay = int(num(p.get("predelay"), 0, 100, 20))
         tone = int(num(p.get("reverb_tone"), 0, 100, 55))
-        ir = os.path.join(TMP, "ir-v3-%.2f-%d-%d.wav" % (room, predelay, tone))
+        ir = os.path.join(TMP, "ir-v4-%.2f-%d-%d.wav" % (room, predelay, tone))
         if not os.path.isfile(ir):
             _impulse(room, ir, predelay, tone)
         extra.append(ir)

@@ -435,7 +435,7 @@
         var v = lp * env * fade * .16; data[pre + i] = v; peak = Math.max(peak, Math.abs(v));
       }
     }
-    [[0,.72,.68],[13,.38,.20],[23,.18,.34],[37,.25,.15],[53,.12,.22],[79,.12,.08]].forEach(function (r) {
+    [[13,.38,.20],[23,.18,.34],[37,.25,.15],[53,.12,.22],[79,.12,.08]].forEach(function (r) {
       var k = pre + Math.round(sr * r[0] / 1000); if (k >= buf.length) return;
       var l = buf.getChannelData(0), rr = buf.getChannelData(1); l[k] += r[1]; rr[Math.min(buf.length - 1, k + 31)] += r[2];
       peak = Math.max(peak, Math.abs(l[k]), Math.abs(rr[Math.min(buf.length - 1, k + 31)]));
@@ -470,7 +470,7 @@
       last.connect(n); last = n; made.push(n);
     }
     var hp = fxNumber(p, 'highpass', 0); if (hp >= 20) biquad('highpass', hp, null, .71);
-    if (Number(p.hum)) { biquad('notch', 50, null, 8); biquad('notch', 100, null, 8); biquad('notch', 150, null, 8); }
+    if (Number(p.hum)) { biquad('notch', 50, null, 30); biquad('notch', 100, null, 30); biquad('notch', 150, null, 30); }
     var bass = fxNumber(p, 'bass', 0); if (bass) biquad('lowshelf', 110, bass, null);
     var mud = fxNumber(p, 'mud', 0); if (mud) biquad('peaking', 280, mud, 1.1);
     var mid = fxNumber(p, 'mid', 0); if (mid) biquad('peaking', 1000, mid, 1.2);
@@ -481,8 +481,8 @@
     var comp = fxNumber(p, 'comp', 0);
     if (comp > 0) {
       var dc = ac.createDynamicsCompressor(); dc.threshold.value = -14 - 2 * comp; dc.ratio.value = 1.5 + comp;
-      dc.knee.value = 12; dc.attack.value = .012; dc.release.value = .18; last.connect(dc); last = dc; made.push(dc);
-      var makeup = ac.createGain(); makeup.gain.value = Math.pow(10, comp * .8 / 20); last.connect(makeup); last = makeup; made.push(makeup);
+      dc.knee.value = 2.83; dc.attack.value = .012; dc.release.value = .18; last.connect(dc); last = dc; made.push(dc);
+      var makeup = ac.createGain(); makeup.gain.value = 1 + comp * 0.6;   // same make-up as the saved file (ops.effects) last.connect(makeup); last = makeup; made.push(makeup);
     }
     var sum = ac.createGain(), rv = Math.max(0, Math.min(100, fxNumber(p, 'reverb', 0))) / 100;
     var dry = ac.createGain(); dry.gain.value = 1 - rv * .6; last.connect(dry); dry.connect(sum); made.push(dry, sum);
