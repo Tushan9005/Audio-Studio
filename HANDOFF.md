@@ -108,7 +108,7 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 1. Start the server in the background.
 2. Make test media with the bundled ffmpeg (`aevalsrc` tones, `testsrc2` video, `testsrc` image).
 3. Upload with `curl -F files=@...` to `/api/upload`.
-4. Call `POST /api/do/<action>` with JSON. Actions: trim, cut, fade, volume, loop, join, export, extract, effects, best, video_music, beat_reel, voice, analyse.
+4. Call `POST /api/do/<action>?wait=1` with JSON (without `wait` it returns `{"job": id}` at once; poll `/api/jobs`). Actions: trim, cut, fade, volume, loop, join, export, extract, effects, best, video_music, beat_reel, voice, analyse.
 5. Check the UI with headless Chrome.
 6. Delete `workspace\` afterwards so the owner starts clean.
 7. Commit locally only.
@@ -181,3 +181,17 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 - Known limits: correction moves notes to the key's notes, so a deliberate out-of-key note gets moved (use "All 12
   notes"); a note sung more than about a semitone off can land on the neighbouring note; it fixes pitch, not timing;
   PSOLA harmonies a 5th+ away sound a little processed (kept quieter in the arrangements).
+
+## Background jobs (21 Nov 2026)
+- Nothing blocks the page any more (the full-screen "Working…" overlay is gone). `POST /api/do/<action>`, `/api/split`
+  and `/api/tune/prepare` all return `{"job": id}` at once; `?wait=1` on /api/do gives the old direct result.
+  `_start_job(fn(progress, stage), action, fid)` in server.py; `GET /api/jobs` lists jobs from the last hour (label,
+  file name, progress or null = unknown, stage text, result, error), so a reloaded page still sees them.
+- Demucs separations queue: a second one reports "Waiting for the other separation to finish" (`ops.separate(stage=)`).
+- Page: Jobs button + tray in the header (`renderJobs`), `trackJob(id, done, fail)` callbacks, `clientJob()` for uploads
+  (XHR with real progress) and saving recordings. Finished jobs show a notification card with **Open** (`openJob`);
+  the app no longer jumps to new files by itself (uploads/recordings still open, unless a preview is playing).
+  Windows notifications are opt-in from the tray link and only appear when the tab is in the background.
+  The Analyse and Split buttons show their job's progress while you stay on that file.
+- Watch out: `document.querySelector('.cover-choices')` matched the Tune tab's buttons once Tune existed and silently
+  broke the Effects quick sounds. Scope lookups to their panel (`[data-p="fx"] .cover-choices`).

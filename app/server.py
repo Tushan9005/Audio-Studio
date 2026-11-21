@@ -134,7 +134,7 @@ def tune_info(fid: str):
 async def tune_prepare(request: Request):
     p = await request.json()
     ops.need(media.get(p.get("id")), "audio", "video")
-    return {"job": _start_job(lambda progress: tune.prepare(p.get("id"), p.get("together"), progress))}
+    return {"job": _start_job(lambda progress, stage: tune.prepare(p.get("id"), p.get("together"), progress, stage), "tune_prepare", p.get("id"))}
 
 
 @app.get("/api/tune/summary/{fid}")
@@ -148,9 +148,18 @@ def tune_audio(fid: str, request: Request):
     return FileResponse(tune.mix(fid, _tune_params(request.query_params)), media_type="audio/wav")
 
 
-# ── tools ──
+# ── tools: every tool runs as a background job, so the page never freezes ──
+LABELS = {"trim": "Keep only this part", "cut": "Remove a part", "fade": "Fades", "volume": "Volume", "loop": "Loop",
+          "join": "Join files", "export": "Save as", "extract": "Take the sound out", "effects": "Effects",
+          "effects_video": "Polish video sound", "best": "Best part", "video_music": "Music under video",
+          "beat_reel": "Beat reel", "practice": "Practice copy", "voice": "Voiceover", "vocal_layers": "Vocal layers mix",
+          "tune": "Save tuned version", "analyse": "Tempo & key", "sound_check": "Sound check",
+          "split": "Split song", "tune_prepare": "Analyse singing"}
+
+
 @app.post("/api/do/{action}")
 async def do(action: str, request: Request):
+    """Starts a tool as a background job and returns {"job": id} at once (add ?wait=1 to get the result directly)."""
     p = await request.json()
     f = p.get("id")
     acts = {
@@ -171,19 +180,26 @@ async def do(action: str, request: Request):
         "practice": lambda: ops.practice_copy(f, p.get("rate"), p.get("start"), p.get("end")),
         "voice": lambda: ops.voiceover(p.get("text"), p.get("voice"), p.get("speed"), p.get("music") or None, p.get("music_db"), p.get("music_from")),
     }
-    if action == "analyse":
-        return {"analysis": await run_in_threadpool(ops.analyse, f)}
-    if action == "tune":
-        files = await run_in_threadpool(tune.save, f, p)
-        return {"file": files[0], "files": files}
-    if action == "sound_check":
-        return {"sound_check": await run_in_threadpool(ops.sound_check, f)}
-    if action not in acts:
+    if action not in acts and action not in ("analyse", "tune", "sound_check"):
         raise MediaError("Unknown tool.")
-    return {"file": await run_in_threadpool(acts[action])}   # long jobs don't freeze the app
+
+    def run(progress, stage):
+        if action == "analyse":
+            return {"analysis": ops.analyse(f)}
+        if action == "sound_check":
+            return {"sound_check": ops.sound_check(f)}
+        if action == "tune":
+            files = tune.save(f, p)
+            return {"file": files[0], "files": files}
+        return {"file": acts[action]()}
+
+    if request.query_params.get("wait"):
+        return await run_in_threadpool(run, lambda x: None, lambda s: None)
+    fid = f or (p.get("ids") or p.get("clips") or [None])[0]
+    return {"job": _start_job(run, action, fid, determinate=False)}
 
 
-# ── long jobs (song splitting): run in the background, the page asks for progress ──
+# ── background jobs: the page polls /api/jobs for progress and results ──
 JOBS = {}
 
 
@@ -191,22 +207,34 @@ JOBS = {}
 async def split(request: Request):
     p = await request.json()
     ops.need(media.get(p.get("id")), "audio", "video")
-    return {"job": _start_job(lambda progress: ops.split(p.get("id"), p.get("stems") or [], progress=progress), key="files")}
+
+    def run(progress, stage):
+        files = ops.split(p.get("id"), p.get("stems") or [], progress, stage)
+        return {"file": files[0] if files else None, "files": files}
+    return {"job": _start_job(run, "split", p.get("id"))}
 
 
-def _start_job(fn, key="result"):
-    """Runs fn(progress) in a background thread; the page polls /api/jobs/<id> for progress and the result."""
+def _start_job(fn, action, fid=None, determinate=True):
+    """Runs fn(progress, stage) in a background thread. progress(x) is 0..1 (None = unknown); stage(text) says
+    what it is waiting for. Finished jobs are kept for an hour so a reloaded page can still show them."""
     jid = secrets.token_hex(6)
-    job = JOBS[jid] = {"progress": 0.0, "done": False, "error": None, "files": [], "result": None, "started": time.time()}
+    try:
+        fname = media.get(fid)["name"] if fid else ""
+    except MediaError:
+        fname = ""
+    job = JOBS[jid] = {"id": jid, "action": action, "label": LABELS.get(action, action), "fid": fid, "fname": fname,
+                       "progress": 0.0 if determinate else None, "stage": None, "done": False, "error": None,
+                       "result": None, "started": time.time(), "finished": None}
 
     def work():
         try:
-            job[key] = fn(lambda x: job.update(progress=round(x, 3)))
+            job["result"] = fn(lambda x: job.update(progress=round(x, 3)), lambda s: job.update(stage=s))
         except MediaError as e:
             job["error"] = str(e)
         except Exception as e:
             job["error"] = "Something went wrong: %s" % str(e)[:300]
         finally:
+            job["finished"] = time.time()
             job["done"] = True
 
     threading.Thread(target=work, daemon=True).start()
@@ -215,12 +243,21 @@ def _start_job(fn, key="result"):
     return jid
 
 
+def _job_view(j):
+    return {**j, "elapsed": round((j["finished"] or time.time()) - j["started"], 1)}
+
+
+@app.get("/api/jobs")
+def jobs():
+    return {"jobs": [_job_view(j) for j in sorted(JOBS.values(), key=lambda j: j["started"])]}
+
+
 @app.get("/api/jobs/{jid}")
 def job(jid: str):
     j = JOBS.get(jid)
     if not j:
         raise MediaError("That job is gone (was the app restarted?).")
-    return {**j, "elapsed": round(time.time() - j["started"], 1)}
+    return _job_view(j)
 
 
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

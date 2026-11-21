@@ -13,14 +13,24 @@
   // ── helpers ──
   function fmt(t) { t = Math.round(Math.max(0, t || 0) * 10) / 10; var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
-  function toast(msg, err) {
-    var t = $('toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
-    clearTimeout(toast._t); toast._t = setTimeout(function () { t.hidden = true; }, err ? 9000 : 4000);
+  // Notifications: small cards bottom-right. toast() = a short message; notify() = a titled card with an action.
+  function notify(o) {
+    var box = $('notes'), n = document.createElement('div');
+    n.className = 'note-card' + (o.kind === 'err' ? ' err' : o.kind === 'info' ? ' info' : '');
+    n.innerHTML = (o.title ? '<b>' + esc(o.title) + '</b>' : '') + (o.text ? '<p>' + esc(o.text) + '</p>' : '') +
+      '<div class="note-actions">' + (o.action ? '<button class="btn small" type="button">' + esc(o.action.label) + '</button>' : '') + '</div>' +
+      '<button class="note-x" type="button" aria-label="Dismiss">✕</button>';
+    var close = function () { n.classList.add('out'); setTimeout(function () { n.remove(); }, 160); };
+    if (o.action) n.querySelector('.note-actions .btn').onclick = function () { o.action.fn(); close(); };
+    n.querySelector('.note-x').onclick = close;
+    var t = setTimeout(close, o.timeout || (o.kind === 'err' ? 12000 : 9000));
+    n.addEventListener('mouseenter', function () { clearTimeout(t); });
+    n.addEventListener('mouseleave', function () { t = setTimeout(close, 4000); });
+    box.appendChild(n);
+    while (box.children.length > 4) box.firstChild.remove();
+    return n;
   }
-  function busy(on, msg, pct) {
-    $('busy').hidden = !on; $('busyMsg').textContent = msg || 'Working…';
-    $('busyBar').hidden = !on || pct == null; if (pct != null) $('busyBar').firstChild.style.width = Math.round(pct * 100) + '%';
-  }
+  function toast(msg, err) { notify({ text: msg, kind: err ? 'err' : 'info', timeout: err ? 9000 : 4500 }); }
   function api(url, opts) {
     return fetch(url, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
@@ -32,6 +42,130 @@
   function post(url, body) { return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   function curFile() { return S.files.filter(function (f) { return f.id === S.cur; })[0] || null; }
   function byId(id) { return S.files.filter(function (f) { return f.id === id; })[0]; }
+
+  // ── background jobs: everything long runs on the server (or uploads in the browser) while you keep working.
+  // The header's Jobs tray shows progress; a notification (and, if allowed, a Windows notification) says when
+  // each one finishes, with an Open button. Server jobs survive a page reload (/api/jobs).
+  var JOBS = {}, jobHooks = {}, jobTimer = null, clientSeq = 0, jobsCleared = {};
+  function eta(j) {
+    var p = j.progress;
+    if (j.stage) return j.stage + '…';
+    if (p == null) return 'Working… ' + Math.round(j.elapsed || 0) + ' s';
+    var left = p > 0.06 ? Math.max(3, (j.elapsed || 0) / p * (1 - p)) : null;
+    return Math.round(p * 100) + '%' + (left ? ' · about ' + (left > 90 ? Math.round(left / 60) + ' min' : Math.round(left / 5) * 5 + ' s') + ' left' : '');
+  }
+  function jobStep(j) {   // what the job is doing right now, in words
+    if (j.action === 'tune_prepare' && j.progress != null && !j.stage) return j.progress < 0.86 ? 'Separating your voice from the guitar · ' + eta(j) : 'Measuring your pitch and key · ' + eta(j);
+    if (j.action === 'split' && !j.stage && j.progress != null && j.progress < 0.02) return 'Loading the splitter…';
+    return eta(j);
+  }
+  function renderJobs() {
+    var list = Object.keys(JOBS).map(function (k) { return JOBS[k]; }).sort(function (a, b) { return b.started - a.started; });
+    var running = list.filter(function (j) { return !j.done; }).length;
+    $('jobsCount').hidden = !running; $('jobsCount').textContent = running;
+    $('jobsBtn').classList.toggle('busy', running > 0);
+    $('jobsEmpty').hidden = list.length > 0;
+    $('jobsNotify').hidden = !('Notification' in window) || Notification.permission !== 'default';
+    $('jobsList').innerHTML = list.map(function (j) {
+      var state = !j.done ? 'run' : j.error ? 'fail' : 'ok';
+      var pct = j.progress == null ? null : Math.round(j.progress * 100);
+      var meta = !j.done ? jobStep(j) : j.error ? j.error : 'Done in ' + Math.max(1, Math.round(j.elapsed || 0)) + ' s';
+      var openable = j.done && !j.error && (j.result && (j.result.file || j.result.files || j.result.analysis || j.result.sound_check || j.action === 'tune_prepare') || j.files);
+      return '<li class="job ' + state + '" data-job="' + j.id + '">' +
+        '<span class="job-ic" aria-hidden="true"></span>' +
+        '<div class="job-main"><div class="job-title">' + esc(j.label) + (j.fname ? ' <span>· ' + esc(j.fname) + '</span>' : '') + '</div>' +
+        (j.done ? '' : '<div class="job-bar' + (pct == null ? ' indet' : '') + '"><i style="width:' + (pct == null ? 35 : pct) + '%"></i></div>') +
+        '<div class="job-meta">' + esc(meta) + '</div></div>' +
+        (openable ? '<button class="btn small" type="button" data-open="' + j.id + '">Open</button>' : '') + '</li>';
+    }).join('');
+    // the buttons that started a job show its progress while you stay on that file
+    var mine = function (action) { return list.filter(function (j) { return !j.done && j.action === action && j.fid === S.cur; })[0]; };
+    var ta = mine('tune_prepare'), sp = mine('split');
+    if (ta) { $('tuAnalyse').disabled = true; $('tuAnalyse').textContent = 'Analysing… ' + (ta.progress == null ? '' : Math.round(ta.progress * 100) + '%'); }
+    else if ($('tuAnalyse').textContent.indexOf('Analysing') === 0) { $('tuAnalyse').disabled = false; renderTuneUI(); }
+    if (sp) { $('splitBtn').disabled = true; $('splitBtn').textContent = 'Splitting… ' + (sp.progress == null ? '' : Math.round(sp.progress * 100) + '%'); }
+    else if ($('splitBtn').textContent.indexOf('Splitting') === 0) { $('splitBtn').disabled = false; $('splitBtn').textContent = 'Split song'; }
+  }
+  function openJob(j) {
+    var r = j.result || {}, fid = (r.file && r.file.id) || (r.files && r.files[0] && r.files[0].id) || j.fid;
+    var tab = { tune_prepare: 'tune', analyse: 'analyse', sound_check: 'analyse' }[j.action];
+    var go = function () {
+      if (fid && byId(fid)) select(fid);
+      if (tab) document.querySelector('.tabs [data-t="' + tab + '"]').click();
+      if (r.analysis) showStats(r.analysis);
+      if (r.sound_check) showSoundCheck(r.sound_check);
+      $('jobsTray').hidden = true; $('jobsBtn').setAttribute('aria-expanded', 'false');
+    };
+    if (fid && !byId(fid)) load().then(go); else go();
+  }
+  function jobFinished(j) {
+    var hook = jobHooks[j.id] || {};
+    delete jobHooks[j.id];
+    if (j.error) {
+      (hook.fail || []).forEach(function (fn) { fn(new Error(j.error)); });
+      notify({ kind: 'err', title: j.label + ' failed', text: j.error + (j.fname ? ' (' + j.fname + ')' : '') });
+      desktopNote(j.label + ' failed', j.error);
+      return;
+    }
+    var r = j.result || {}, files = r.files || (r.file ? [r.file] : []);
+    if (files.length) load();
+    (hook.done || []).forEach(function (fn) { fn(r); });
+    var text = files.length > 1 ? files.length + ' files added: ' + files.map(function (f) { return f.name.split(' · ').pop(); }).join(', ') :
+      files.length ? '"' + files[0].name + '" is in your library.' : j.action === 'tune_prepare' ? (r.keys ? 'Key ' + r.keys[0].label + (r.together ? ', guitar at A = ' + r.guitar_a + ' Hz' : '') + '. Ready to tune.' : 'Ready.') :
+      j.action === 'analyse' ? 'Tempo, key and loudness are ready.' : j.action === 'sound_check' ? 'Your sound check is ready.' : '';
+    if (!hook.quiet) notify({ title: j.label + ' done' + (j.fname && !files.length ? ' · ' + j.fname : ''), text: text, action: { label: 'Open', fn: function () { openJob(j); } } });
+    desktopNote(j.label + ' done', text);
+  }
+  function desktopNote(title, body) {   // only when this tab is in the background and you allowed it
+    if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+    try { var n = new Notification('Audio Studio: ' + title, { body: body || '', tag: 'audio-studio' }); n.onclick = function () { window.focus(); n.close(); }; } catch (e) {}
+  }
+  function pollJobs() {
+    clearTimeout(jobTimer);
+    return api('/api/jobs').then(function (j) {
+      j.jobs.forEach(function (job) {
+        if (jobsCleared[job.id]) return;
+        var prev = JOBS[job.id];
+        JOBS[job.id] = job;
+        if (job.done && ((prev && !prev.done) || (!prev && jobHooks[job.id]))) jobFinished(job);
+      });
+      renderJobs();
+      var running = Object.keys(JOBS).some(function (k) { return !JOBS[k].done; });
+      if (running) jobTimer = setTimeout(pollJobs, 800);
+    }).catch(function () { jobTimer = setTimeout(pollJobs, 3000); });
+  }
+  // track a server job; done/fail callbacks run when it finishes (even if you are elsewhere in the app)
+  function trackJob(jid, done, fail, quiet) {
+    var h = jobHooks[jid] = jobHooks[jid] || { done: [], fail: [] };
+    if (done) h.done.push(done); if (fail) h.fail.push(fail); if (quiet) h.quiet = true;
+    JOBS[jid] = JOBS[jid] || { id: jid, label: 'Starting…', fname: '', progress: null, done: false, started: Date.now() / 1000, elapsed: 0 };
+    renderJobs(); pollJobs();
+  }
+  function startJob(url, body, done, fail) {
+    return post(url, body).then(function (j) { trackJob(j.job, done, fail); return j.job; });
+  }
+  // a job that runs in the browser (uploads, saving a recording)
+  function clientJob(label, fname) {
+    var id = 'c' + (++clientSeq), j = JOBS[id] = { id: id, label: label, fname: fname || '', progress: 0, done: false, started: Date.now() / 1000, elapsed: 0, client: true };
+    var tick = setInterval(function () { j.elapsed = Date.now() / 1000 - j.started; renderJobs(); }, 1000);
+    renderJobs();
+    return {
+      progress: function (p) { j.progress = p; j.elapsed = Date.now() / 1000 - j.started; renderJobs(); },
+      finish: function (result) { clearInterval(tick); j.done = true; j.result = result; j.elapsed = Date.now() / 1000 - j.started; renderJobs(); jobFinished(j); },
+      fail: function (err) { clearInterval(tick); j.done = true; j.error = err.message || String(err); renderJobs(); jobFinished(j); }
+    };
+  }
+  $('jobsBtn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var open = $('jobsTray').hidden; $('jobsTray').hidden = !open; this.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) renderJobs();
+  });
+  document.addEventListener('click', function (e) { if (!$('jobsTray').hidden && !e.target.closest('#jobsTray, #jobsBtn, .note-card')) { $('jobsTray').hidden = true; $('jobsBtn').setAttribute('aria-expanded', 'false'); } });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('jobsTray').hidden) { $('jobsTray').hidden = true; $('jobsBtn').setAttribute('aria-expanded', 'false'); $('jobsBtn').focus(); } });
+  $('jobsList').addEventListener('click', function (e) { var b = e.target.closest('[data-open]'); if (b && JOBS[b.getAttribute('data-open')]) openJob(JOBS[b.getAttribute('data-open')]); });
+  $('jobsClear').addEventListener('click', function () { Object.keys(JOBS).forEach(function (k) { if (JOBS[k].done) { jobsCleared[k] = 1; delete JOBS[k]; } }); renderJobs(); });
+  $('jobsNotify').addEventListener('click', function () { Notification.requestPermission().then(function () { renderJobs(); }); });
+  function anyPreview() { return !!(S.fxPreview || LP || TP); }
 
   // ── library ──
   function load(selectId) {
@@ -95,13 +229,21 @@
   // ── upload (button + drag & drop) ──
   function upload(list) {
     if (!list || !list.length) return;
-    var fd = new FormData();
+    var fd = new FormData(), n = list.length;
     Array.prototype.forEach.call(list, function (f) { fd.append('files', f, f.name); });
-    busy(true, 'Adding ' + list.length + ' file' + (list.length > 1 ? 's' : '') + '…');
-    api('/api/upload', { method: 'POST', body: fd }).then(function (j) {
-      toast('Added ' + j.files.length + ' file' + (j.files.length > 1 ? 's' : '') + '.');
-      return load(j.files[0] && j.files[0].id);
-    }).catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); $('up').value = ''; });
+    var cj = clientJob('Adding ' + n + ' file' + (n > 1 ? 's' : ''), n === 1 ? list[0].name : '');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.onprogress = function (e) { if (e.lengthComputable) cj.progress(e.loaded / e.total * 0.95); };
+    xhr.onload = function () {
+      var j = {}; try { j = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 400 || !j.files) { cj.fail(new Error(j.error || 'Upload failed (' + xhr.status + ').')); return; }
+      cj.finish({ files: j.files });
+      if (!S.cur || !anyPreview()) load(j.files[0].id);   // you just added it: show it, unless a preview is playing
+    };
+    xhr.onerror = function () { cj.fail(new Error('Upload failed. Is Audio Studio still running?')); };
+    xhr.send(fd);
+    $('up').value = '';
   }
   $('up').addEventListener('change', function () { upload(this.files); });
   ['dragenter', 'dragover'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); $('drop').classList.add('over'); }); });
@@ -124,10 +266,11 @@
         var blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' }), fd = new FormData();
         fd.append('file', blob, 'take.webm');
         var d = new Date(), name = 'Recording ' + d.toLocaleDateString('en-GB') + ' ' + d.toTimeString().slice(0, 5);
-        busy(true, 'Saving your recording…');
+        var cj = clientJob('Saving recording', name);
+        cj.progress(null);
         api('/api/record?name=' + encodeURIComponent(name), { method: 'POST', body: fd })
-          .then(function (j) { toast('Recording saved.'); return load(j.file.id); })
-          .catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); });
+          .then(function (j) { cj.finish({ file: j.file }); if (!anyPreview()) load(j.file.id); })
+          .catch(function (x) { cj.fail(x); });
       };
       (function meter() {
         an.getFloatTimeDomainData(buf); var pk = 0; for (var i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i]));
@@ -189,6 +332,7 @@
     $('fxPreview').disabled = !hasSound;
     $('lpPreview').disabled = !hasSound;
     refreshTune(f);
+    renderJobs();
   }
   // The whole file is always framed by two draggable handles. A frame that still covers the whole
   // file counts as "nothing selected", so Play plays everything and Trim asks you to drag first.
@@ -300,23 +444,9 @@
     var f = curFile(); if (!f) return;
     var stems = Array.prototype.map.call(document.querySelectorAll('[data-stem]:checked'), function (c) { return c.getAttribute('data-stem'); });
     if (!stems.length) { toast('Tick at least one thing to make.', true); return; }
-    busy(true, 'Getting ready to split "' + f.name + '"…', 0);
-    post('/api/split', { id: f.id, stems: stems }).then(function (j) {
-      return new Promise(function (ok, fail) {
-        (function poll() {
-          api('/api/jobs/' + j.job).then(function (st) {
-            if (st.done) { if (st.error) fail(new Error(st.error)); else ok(st.files); return; }
-            var p = st.progress, left = p > 0.06 ? Math.max(5, st.elapsed / p * (1 - p)) : null;
-            busy(true, 'Splitting "' + f.name + '"… ' + Math.round(p * 100) + '%' +
-              (left ? ' · about ' + (left > 90 ? Math.round(left / 60) + ' min' : Math.round(left / 5) * 5 + ' s') + ' left' : (p < 0.02 ? ' · loading the splitter' : '')), p);
-            setTimeout(poll, 1000);
-          }).catch(fail);
-        })();
-      });
-    }).then(function (files) {
-      toast('Done: ' + files.length + ' new file' + (files.length > 1 ? 's' : '') + ' added (' + files.map(function (x) { return x.name.split(' · ').pop(); }).join(', ') + ').');
-      return load(files[0].id);
-    }).catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); });
+    startJob('/api/split', { id: f.id, stems: stems }).then(function () {
+      toast('Splitting "' + f.name + '" in the background. Keep working; you will be told when it is done.');
+    }, function (x) { toast(x.message, true); });
   });
   document.addEventListener('keydown', function (e) {
     if (e.target.closest('input, textarea, select, [contenteditable]') || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -398,24 +528,13 @@
     return { key: TS.key, scale: TS.scale, strength: TS.strength, style: TS.style, ref: TS.ref === 'guitar' && inf ? inf.tuning_cents : 0 };
   }
   function tuneQuery() { var p = tuneParams(); return Object.keys(p).map(function (k) { return k + '=' + encodeURIComponent(p[k]); }).join('&'); }
-  function pollJob(jid, label) {
-    return new Promise(function (ok, fail) {
-      (function poll() {
-        api('/api/jobs/' + jid).then(function (st) {
-          if (st.done) { if (st.error) fail(new Error(st.error)); else ok(st); return; }
-          busy(true, label(st.progress, st), st.progress); setTimeout(poll, 700);
-        }).catch(fail);
-      })();
-    });
-  }
   function analyseTune(fid, together) {
-    var f = byId(fid);
-    busy(true, 'Getting ready…', 0);
-    return post('/api/tune/prepare', { id: fid, together: together }).then(function (j) {
-      return pollJob(j.job, function (p) {
-        return (together && p < 0.86 ? 'Separating your voice from the guitar… ' : 'Measuring your pitch and key… ') + Math.round(p * 100) + '%' + (f ? ' · ' + f.name : '');
-      });
-    }).then(function (st) { TS.infos[fid] = st.result; return st.result; }).finally(function () { busy(false); });
+    var running = Object.keys(JOBS).map(function (k) { return JOBS[k]; }).filter(function (j) { return !j.done && j.action === 'tune_prepare' && j.fid === fid; })[0];
+    return new Promise(function (ok, fail) {
+      var done = function (info) { TS.infos[fid] = info; if (S.cur === fid) renderTuneUI(); ok(info); };
+      if (running) { trackJob(running.id, done, fail); return; }      // already analysing: wait for that one
+      startJob('/api/tune/prepare', { id: fid, together: together }, done, fail).catch(fail);
+    });
   }
   // every source that an in-key voice (or the guitar) needs is analysed first; the lead uses the Tune tab choice
   function ensureLayerAnalyses(leadOnly) {
@@ -428,7 +547,7 @@
     });
     if (!need.length || need.every(function (n) { return TS.infos[n[0]]; })) return Promise.resolve();
     if (need.some(function (n) { return n[0] === S.cur && !TS.infos[n[0]]; }))
-      toast(leadTogether ? 'First the app separates your voice from the guitar and finds the key (once per recording).' : 'First the app measures your pitch and finds the key (once per recording).');
+      toast((leadTogether ? 'Separating your voice from the guitar and finding the key' : 'Measuring your pitch and finding the key') + ' in the background (once per recording). See Jobs.');
     return need.reduce(function (pr, n) { return pr.then(function () { return TS.infos[n[0]] ? null : analyseTune(n[0], n[1]); }); }, Promise.resolve())
       .then(function () { renderTuneUI(); });
   }
@@ -492,10 +611,8 @@
     var together = document.querySelector('input[name="tuTogether"]:checked').value === '1';
     stopTunePreview(); stopLayerPreview();
     TS.keyFor = null;
-    analyseTune(f.id, together).then(function (inf) {
-      renderTuneUI();
-      toast('Found ' + inf.keys[0].label + (inf.together ? ', guitar at A = ' + inf.guitar_a + ' Hz' : '') + '. Press Live preview to hear it tuned.');
-    }, function (e) { toast(e.message, true); });
+    analyseTune(f.id, together).then(function () { if (S.cur === f.id) renderTuneUI(); }, function () {});
+    toast('Analysing in the background: keep listening or working. You will be told when it is ready.');
   });
 
   // pitch graph: what you sang (grey) and the tuned pitch (amber) on the notes of the key
@@ -747,7 +864,10 @@
     var f = curFile(), btn = this;
     if (!f || !S.ws || !S.ws.getMediaElement) { toast('Select your recording first.', true); return; }
     if (!$('layerTracks').children.length) { toast('Choose an arrangement or add a layer first.', true); return; }
-    ensureLayerAnalyses().then(function () { startLayerPreview(btn); }, function (e) { toast(e.message, true); });
+    var fid = S.cur, ready = !layerRows().some(function (r) { return (isSmart(r.voice) || r.voice === 'backing') && !TS.infos[r.src]; });
+    if (ready) { startLayerPreview(btn); return; }
+    // analysing takes a while: it runs in the background and the preview starts only when you press it again
+    ensureLayerAnalyses().then(function () { if (S.cur === fid) notify({ title: 'Layers ready', text: 'Press Live preview to hear them.', action: { label: 'Live preview', fn: function () { if (S.cur === fid && !LP) $('lpPreview').click(); } } }); }, function (e) { toast(e.message, true); });
   });
   function startLayerPreview(btn) {
     stopFxPreview(); stopTunePreview();
@@ -793,7 +913,8 @@
     var preset = layerArrangements[key]; if (!preset) return;
     var smart = preset.tracks.some(function (v) { return v[1] !== 'fixed'; });
     if (smart && !TS.infos[S.cur]) {   // in-key voices need the singing analysed first: do it now, then apply
-      ensureLayerAnalyses(true).then(function () { applyArrangement(key); }, function (e) { toast(e.message, true); $('layerPreset').value = ''; });
+      var fid = S.cur;
+      ensureLayerAnalyses(true).then(function () { if (S.cur === fid && $('layerPreset').value === key) applyArrangement(key); }, function (e) { toast(e.message, true); $('layerPreset').value = ''; });
       return;
     }
     var together = TS.infos[S.cur] && TS.infos[S.cur].together;
@@ -860,7 +981,7 @@
     cover_intimate: 'Intimate sounds close to the listener, with just enough space to avoid sounding dry.',
     cover_spacious: 'Spacious gives sustained notes a wider, longer tail while keeping the first word clear.'
   };
-  document.querySelector('.cover-choices').addEventListener('click', function (e) {
+  document.querySelector('[data-p="fx"] .cover-choices').addEventListener('click', function (e) {
     var b = e.target.closest('[data-cover-preset]'); if (!b) return;
     var key = b.getAttribute('data-cover-preset'); $('preset').value = key;
     $('preset').dispatchEvent(new Event('change'));
@@ -1086,17 +1207,17 @@
   });
 
   function runTool(a, body) {
-    busy(true, MSG[a]);
-    post('/api/do/' + a, body).then(function (j) {
-      if (j.sound_check) {
-        var report = j.sound_check;
-        $('soundCheckResults').innerHTML = '<p>Checked first ' + esc(report.seconds) + ' s · Sample peak: ' + esc(report.peak_db) + ' dBFS · Average RMS: ' + esc(report.rms_db) + ' dBFS (not LUFS) · Near-full-scale samples: ' + esc(report.near_full_scale_percent) + '%</p><ul>' + report.tips.map(function (tip) { return '<li>' + esc(tip) + '</li>'; }).join('') + '</ul>';
-        return;
-      }
-      if (j.analysis) { showStats(j.analysis); return; }
-      toast(j.files && j.files.length > 1 ? 'Done: ' + j.files.length + ' files added (' + j.files.map(function (x) { return '"' + x.name + '"'; }).join(', ') + ').' : 'Done: "' + j.file.name + '" added to the library.');
-      return load(j.file.id);
-    }).catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); });
+    var fid = body.id;
+    startJob('/api/do/' + a, body, function (r) {
+      if (r.sound_check && S.cur === fid) showSoundCheck(r.sound_check);
+      if (r.analysis && S.cur === fid) showStats(r.analysis);
+    }).then(function () {
+      if (!$('jobsTray').hidden) return;
+      toast((MSG[a] || 'Working…').replace('…', '') + ' in the background. See Jobs.');
+    }, function (x) { toast(x.message, true); });
+  }
+  function showSoundCheck(report) {
+    $('soundCheckResults').innerHTML = '<p>Checked first ' + esc(report.seconds) + ' s · Sample peak: ' + esc(report.peak_db) + ' dBFS · Average RMS: ' + esc(report.rms_db) + ' dBFS (not LUFS) · Near-full-scale samples: ' + esc(report.near_full_scale_percent) + '%</p><ul>' + report.tips.map(function (tip) { return '<li>' + esc(tip) + '</li>'; }).join('') + '</ul>';
   }
 
   function showStats(a) {
@@ -1190,4 +1311,5 @@
 
   applyRate();
   load();
+  pollJobs();
 })();

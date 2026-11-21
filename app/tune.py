@@ -69,7 +69,7 @@ def info(fid):
 
 
 # ── 1. analysis ──
-def prepare(fid, together, progress=lambda p: None):
+def prepare(fid, together, progress=lambda p: None, stage=lambda s: None):
     """Separates (if needed) and analyses a recording. Cached; returns the analysis summary."""
     it = ops.need(get(fid), "audio", "video")
     if not it["has_audio"]:
@@ -84,7 +84,7 @@ def prepare(fid, together, progress=lambda p: None):
             os.remove(os.path.join(d, f))
         _manips.pop(fid, None)
         if together:
-            src, sr = ops.separate(it, lambda p: progress(p * 0.85))
+            src, sr = ops.separate(it, lambda p: progress(p * 0.85), stage)
             voc = src["vocals"].mean(axis=1)
             back = sum(v for k, v in src.items() if k != "vocals")
             sf.write(os.path.join(d, "vocals.wav"), voc.astype(np.float32), sr)

@@ -758,15 +758,17 @@ def _demucs():
     return _DEMUCS
 
 
-def separate(it, progress=lambda p: None):
+def separate(it, progress=lambda p: None, stage=lambda s: None):
     """Runs Demucs on a library item. Returns ({source name: (samples, 2) float32 array}, sample rate).
     One separation at a time (it uses every CPU core)."""
     import torch
     from demucs.apply import apply_model
     if it["duration"] > 20 * 60:
         raise MediaError("Songs up to 20 minutes can be separated. Trim it first.")
-    if not _split_lock.acquire(blocking=False):
-        raise MediaError("Another song is being separated. Wait for it to finish.")
+    if not _split_lock.acquire(blocking=False):   # one at a time (it uses every core): wait for our turn
+        stage("Waiting for the other separation to finish")
+        _split_lock.acquire()
+        stage(None)
     tmp = os.path.join(TMP, "split-%s.wav" % secrets.token_hex(4))
     try:
         progress(0.01)
@@ -797,7 +799,7 @@ def separate(it, progress=lambda p: None):
         except OSError: pass
 
 
-def split(fid, wanted, progress=lambda p: None):
+def split(fid, wanted, progress=lambda p: None, stage=lambda s: None):
     """Separates a song and adds the chosen mixes (see STEMS) to the library."""
     it = need(get(fid), "audio", "video")
     if not it["has_audio"]:
@@ -805,7 +807,7 @@ def split(fid, wanted, progress=lambda p: None):
     wanted = [w for w in STEMS if w in (wanted or [])]
     if not wanted:
         raise MediaError("Tick at least one thing to make.")
-    src, sr = separate(it, progress)
+    src, sr = separate(it, progress, stage)
     results = []
     for w in wanted:
         label, parts = STEMS[w]

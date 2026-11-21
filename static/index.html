@@ -11,6 +11,7 @@
 <header class="top">
   <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 18v-4M11 22V10M15 25V7M19 20v-8M23 23V9M27 17v-2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg> Audio Studio</div>
   <div class="top-right"><span class="top-note"><span class="dot-live" aria-hidden="true"></span>Private · runs only on this PC</span>
+  <button class="btn small jobs-btn" id="jobsBtn" type="button" aria-expanded="false" aria-controls="jobsTray"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h9M3 10h6M3 15h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="15" cy="10" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Jobs<span class="badge" id="jobsCount" hidden></span></button>
   <button class="btn small" id="tunerBtn" type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16 12.5 7.5M11 4l5 5M13.5 2.5l4 4M3 17l2-1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="6" cy="14" r="2.4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Tuner</button></div>
 </header>
 
@@ -362,7 +363,12 @@
   </main>
 </div>
 
-<div class="busy" id="busy" hidden><div class="spin"></div><p id="busyMsg">Working…</p><div class="bar" id="busyBar" hidden><i></i></div></div>
+<section class="tray" id="jobsTray" aria-label="Background jobs" hidden>
+  <div class="tray-head"><h2>Background jobs</h2><button class="btn small ghost" id="jobsClear" type="button">Clear finished</button></div>
+  <ul class="jobs" id="jobsList"></ul>
+  <p class="tray-empty" id="jobsEmpty">Nothing running. Long tasks (analysing, splitting, effects, saving) run here while you keep working.</p>
+  <button class="tray-notify" id="jobsNotify" type="button" hidden>Also tell me in Windows when a job finishes</button>
+</section>
 
 <div class="modal" id="tuner" role="dialog" aria-modal="true" aria-labelledby="tunerTitle" hidden>
   <div class="tuner">
@@ -383,7 +389,7 @@
     <p class="note">Uses your microphone, only in this browser. Pluck one string at a time and let it ring.</p>
   </div>
 </div>
-<div class="toast" id="toast" role="status" hidden></div>
+<div class="notes" id="notes" role="status" aria-live="polite"></div>
 
 <script src="vendor/wavesurfer.min.js"></script>
 <script src="vendor/regions.min.js"></script>
