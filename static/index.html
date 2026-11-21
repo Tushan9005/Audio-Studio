@@ -166,7 +166,7 @@
           </div>
           <div class="fx-command-presets">
             <span class="fx-group-label">Arrangement</span>
-            <div class="layer-preset-row"><select id="layerPreset" aria-label="Arrangement preset"></select><button class="btn" id="layerStack" type="button">Load</button></div>
+            <div class="layer-preset-row"><select id="layerPreset" aria-label="Arrangement"><option value="">Choose an arrangement…</option><option value="custom" hidden>Custom (your changes)</option></select></div>
           </div>
           <div class="fx-actions">
             <button class="btn" id="lpBypass" type="button" disabled aria-pressed="false" title="Hear the selected file on its own">Hear original</button>
@@ -177,7 +177,7 @@
         <div class="card layers-card">
           <div class="layers-head"><p class="note" id="layerPresetHelp" aria-live="polite"></p><button class="btn" id="layerAdd" type="button">+ Add layer</button></div>
           <div id="layerTracks"></div>
-          <p class="layers-empty" id="layersEmpty">No layers yet. Pick an arrangement above and press <b>Load</b>, or add a layer.</p>
+          <p class="layers-empty" id="layersEmpty">No layers yet. Choose an arrangement above (it loads straight away), or add a layer.</p>
           <details class="tips"><summary>How layers work &amp; tips</summary>
             <p class="note">1. Select a vocals-only audio file in the library (Split song in Practice can make one). 2. Load an arrangement or add layers, then press Live preview and adjust while it plays. 3. Render the mix, then use Effects for reverb and Edit → Save as to export.</p>
             <p class="note">These are starting settings based on common production techniques, not copies of any artist's sound. Artificial doubles are delayed copies, so check that the mix doesn't sound hollow or phasey. Separately sung takes usually sound more natural: choose them as a layer's Source.</p>

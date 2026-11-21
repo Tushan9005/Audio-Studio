@@ -337,7 +337,7 @@
     row.innerHTML = '<label>Part<input class="layer-name" value="' + esc(name) + '"></label><label>Source<select data-layer="source"><option value="">Selected lead</option></select></label>' +
       [['shift','Pitch (semitones)',-12,12,shift,1],['db','Level (dB)',-36,6,db,1],['pan','Pan (−1 left / +1 right)',-1,1,pan,.1],['delay','Start offset (ms)',0,5000,0,10]].map(function (v) { return '<label>' + v[1] + '<input type="number" data-layer="' + v[0] + '" min="' + v[2] + '" max="' + v[3] + '" value="' + v[4] + '" step="' + v[5] + '"></label>'; }).join('') + '<label class="tick"><input type="checkbox" data-layer="mute">Mute</label><label class="tick"><input type="checkbox" data-layer="solo">Solo</label><button class="btn ghost" type="button">Remove</button>';
     S.files.filter(function (f) { return f.kind === 'audio'; }).forEach(function (f) { row.querySelector('select').add(new Option(f.name, f.id)); });
-    row.querySelector('button').onclick = function () { row.remove(); scheduleLayerPreview(); };
+    row.querySelector('button').onclick = function () { row.remove(); markLayersCustom(); scheduleLayerPreview(); };
     $('layerTracks').appendChild(row);
     row.querySelector('[data-layer="delay"]').value = delay || 0;
   }
@@ -352,8 +352,7 @@
     minor: {name:'Minor third + fifth + bass — fixed', help:'Darker fixed +3 and +7 harmonies with a lower octave. This is not an automatic minor-key arrangement; check each phrase against your chords.', tracks:[['Lead',0,-3,0],['Minor third',3,-12,-.5],['Fifth',7,-15,.5],['Octave bass',-12,-18,0]]}
   };
   Object.keys(layerArrangements).forEach(function (key) { $('layerPreset').add(new Option(layerArrangements[key].name, key)); });
-  $('layerPreset').onchange = function () { $('layerPresetHelp').textContent = 'Selected preset: ' + layerArrangements[this.value].help + ' Click Load arrangement to apply.'; };
-  $('layerPreset').onchange();
+  $('layerPresetHelp').textContent = 'Choose an arrangement: it loads straight away, and plays at once if Live preview is on.';
 
   // ── vocal layers: live preview ──
   // The server makes each layer's pitch-shifted voice with the SAME ffmpeg chain as the final render
@@ -404,7 +403,7 @@
     LP.bufs[r.key] = 'loading';
     var lp = LP;
     fetch('/api/layer_stem/' + encodeURIComponent(r.src) + '?shift=' + r.shift)
-      .then(function (res) { if (!res.ok) return res.json().then(function (j) { throw new Error(j.error || 'Could not prepare that layer.'); }); return res.arrayBuffer(); })
+      .then(function (res) { if (!res.ok) return res.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || (res.status === 404 ? 'Audio Studio needs a restart to use the layer preview: close the black window and double-click Start Audio Studio.bat.' : 'Could not prepare that layer.')); }); return res.arrayBuffer(); })
       .then(function (ab) { return lp.ac.decodeAudioData(ab); })
       .then(function (buf) { if (LP !== lp) return; lp.bufs[r.key] = buf; syncLayerPreview(); })
       .catch(function (e) { if (LP !== lp) return; delete lp.bufs[r.key]; toast(e.message, true); syncLayerPreview(); });
@@ -487,17 +486,35 @@
     $('lpNote').textContent = LP.bypass ? 'ORIGINAL · the selected file on its own, for comparison.' : 'LIVE · change pitch, level, pan, offset, mute or solo while it plays.';
     if (!LP.bypass) syncLayerPreview();
   });
-  $('layerTracks').addEventListener('input', scheduleLayerPreview);
-  $('layerTracks').addEventListener('change', scheduleLayerPreview);
-  $('layerAdd').onclick = function () { addVocalLayer('Harmony', 0, -9, 0); scheduleLayerPreview(); };
-  $('layerStack').onclick = function () {
-    if ($('layerTracks').children.length && !confirm('Replace the current layer arrangement?')) return;
+  // Arrangements load as soon as they are picked. Once you change a layer yourself the dropdown shows
+  // "Custom", and only then does picking another arrangement ask before replacing your changes.
+  var layersCustom = false, layersFrom = '';
+  function markLayersCustom() {
+    if (!$('layerTracks').children.length) return;
+    layersCustom = true;
+    var c = $('layerPreset').querySelector('option[value="custom"]'); c.hidden = false; $('layerPreset').value = 'custom';
+    $('layerPresetHelp').textContent = 'Your own arrangement' + (layersFrom ? ' (started from ' + layersFrom + ')' : '') + '. Picking another arrangement replaces it.';
+  }
+  function applyArrangement(key) {
+    var preset = layerArrangements[key]; if (!preset) return;
     $('layerTracks').replaceChildren();
-    var preset = layerArrangements[$('layerPreset').value];
-    preset.tracks.forEach(function (v) { addVocalLayer.apply(null,v); });
-    $('layerPresetHelp').textContent = 'Loaded: ' + preset.name + '. ' + preset.help;
+    preset.tracks.forEach(function (v) { addVocalLayer.apply(null, v); });
+    layersCustom = false; layersFrom = preset.name;
+    $('layerPreset').querySelector('option[value="custom"]').hidden = true; $('layerPreset').value = key;
+    $('layerPresetHelp').textContent = preset.help;
     scheduleLayerPreview();
-  };
+  }
+  var layersPrev = '';
+  $('layerPreset').addEventListener('focus', function () { layersPrev = this.value; });
+  $('layerPreset').addEventListener('change', function () {
+    var key = this.value;
+    if (!layerArrangements[key]) return;
+    if (layersCustom && !confirm('Replace your own layer changes with "' + layerArrangements[key].name + '"?')) { this.value = 'custom'; return; }
+    applyArrangement(key); layersPrev = key;
+  });
+  $('layerTracks').addEventListener('input', function () { markLayersCustom(); scheduleLayerPreview(); });
+  $('layerTracks').addEventListener('change', function () { markLayersCustom(); scheduleLayerPreview(); });
+  $('layerAdd').onclick = function () { addVocalLayer('Harmony', 0, -9, 0); markLayersCustom(); scheduleLayerPreview(); };
   document.querySelector('.tabs').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-t]'); if (!b) return;
     document.querySelectorAll('.tabs button').forEach(function (x) { x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });

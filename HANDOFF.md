@@ -140,7 +140,9 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 - `fmt()` now rounds before formatting (9.96 s used to show as "0:010.0").
 
 ## Vocal layers live preview (21 Nov 2026)
-- Vocal layers has the same command bar as Effects: Hear original · Live preview · Render vocal mix.
+- Vocal layers has the same command bar as Effects: Hear original · Live preview · Render vocal mix. Arrangements load as soon
+  they are picked (no Load button); editing a layer switches the dropdown to "Custom", and only then does picking
+  another arrangement ask before replacing. A 404 from /api/layer_stem means the server is older than the page (restart it).
 - How it works: `GET /api/layer_stem/{fid}?shift=` → `ops.layer_stem` makes one layer's mono, pitch-shifted voice
   with `_layer_chain()`, the **same** function the render uses (cached as `tmp\layer-<id>-<shift>.wav`, files older
   than a day are tidied). The browser (`LP` in app.js) decodes the stems and plays them with AudioBufferSourceNodes,
