@@ -4,6 +4,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--ink); font: 14.5px/1.5 "Segoe UI", system-ui, sans-serif; }
 button, input, select, textarea { font: inherit; color: inherit; }

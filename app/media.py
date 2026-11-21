@@ -65,7 +65,7 @@ def new_path(ext):
 
 
 def clean_name(name, fallback="file"):
-    name = re.sub(r"[^\w\-\. ()&+,]+", "_", str(name or "")).strip(" ._")
+    name = re.sub(r"[^\w\-\. ()&+,·×#%:]+", "_", str(name or "")).strip(" ._")
     return (name or fallback)[:90]
 
 

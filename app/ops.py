@@ -394,9 +394,15 @@ def beat_reel(clip_ids, mid, p):
     per = int(pick(str(p.get("beats_per_cut", "4")), ("1", "2", "4", "8"), "4"))
     off = num(p.get("music_from"), 0, max(0, m["duration"] - 3), 0)
     tempo, bt, _, _ = beats(m)
-    bt = [t - off for t in bt if t >= off]
-    if len(bt) < 4:   # no clear beat: cut every 2 seconds
-        bt = list(np.arange(0, total + 2, 2.0 / per))
+    # A steady beat grid from the tempo, lined up with the beats that were heard, so quiet intros
+    # (where the detector hears nothing) still get cuts on the beat.
+    if len(bt) >= 4:
+        period = float(np.median(np.diff(bt)))
+        phase = float(bt[0]) % period
+        grid = np.arange(phase, m["duration"] + period, period)
+    else:   # no clear beat: a cut every 2 seconds
+        grid = np.arange(0, m["duration"] + 2, 2.0 / per)
+    bt = [t - off for t in grid if t >= off]
     cuts = [0.0] + [bt[k] for k in range(per, len(bt), per) if bt[k] <= total]
     if cuts[-1] < total - 0.3:
         cuts.append(total)
@@ -438,7 +444,7 @@ def beat_reel(clip_ids, mid, p):
         for s in parts:
             try: os.remove(s)
             except OSError: pass
-    r = register(fid, "mp4", "Beat reel %s · %d cuts · %.0f BPM" % (p.get("aspect", "9:16"), len(durs), tempo), "beat_reel", m["id"])
+    r = register(fid, "mp4", "Beat reel %s · %d shot%s · %.0f BPM" % (p.get("aspect", "9:16"), len(durs), "" if len(durs) == 1 else "s", tempo), "beat_reel", m["id"])
     return r
 
 
