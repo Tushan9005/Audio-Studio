@@ -91,12 +91,31 @@ def _layer_chain(shift):
     return chain
 
 
-def layer_stem(fid, shift):
-    """One layer's voice (mono, pitch-shifted) for the browser's live preview; cached in workspace/tmp."""
+LAYER_VOICES = ("fixed", "backing")   # plus every key-aware voice in tune.VOICES
+
+
+def layer_stem(fid, shift=0, voice="fixed", params=None, seed=0):
+    """One layer's audio as a WAV file, used by BOTH the browser's live preview and the final render, so the
+    preview is exactly what gets saved. Cached in workspace/tmp.
+      fixed   - the voice shifted by a fixed number of semitones (ffmpeg chain, _layer_chain)
+      backing - the guitar/backing separated in the Tune tab (stereo, unchanged)
+      tuned, double, h3up ... - pitch-corrected voice / key-aware harmonies (app/tune.py)
+    Once a recording has been analysed as "singing + guitar", voices are made from the separated vocal,
+    so the guitar is never pitch-shifted along with the voice."""
     import time
-    it = need(get(fid), "audio")
+    from . import tune
+    it = need(get(fid), "audio", "video")
+    if voice == "backing":
+        b = tune.backing(it["id"])
+        if not b:
+            raise MediaError("There is no separated guitar for this file: analyse it as singing + guitar in the Tune tab.")
+        return b
+    if voice in tune.VOICES:
+        return tune.voice(it["id"], params or {}, voice, seed)
     s = _layer_shift(shift)
-    path = os.path.join(TMP, "layer-%s-%+.2f.wav" % (it["id"], s))
+    sep = tune.raw_vocal(it["id"])
+    src = sep or path_of(it)
+    path = os.path.join(TMP, "layer-%s-%s%+.2f.wav" % (it["id"], "v" if sep else "", s))
     if not os.path.isfile(path):
         for old in os.listdir(TMP):   # tidy previews older than a day
             if old.startswith("layer-"):
@@ -106,32 +125,41 @@ def layer_stem(fid, shift):
                 except OSError:
                     pass
         part = path + ".part.wav"
-        run(["-i", path_of(it), "-vn", "-af", _layer_chain(s), "-ar", str(SR), "-ac", "1", "-c:a", "pcm_s16le", part])
+        run(["-i", src, "-vn", "-af", _layer_chain(s), "-ar", str(SR), "-ac", "1", "-c:a", "pcm_s16le", part])
         os.replace(part, path)
     return path
 
 
-def vocal_layers(fid, layers):
-    lead = need(get(fid), "audio")
-    if not isinstance(layers, list) or not 1 <= len(layers) <= 8:
-        raise MediaError("Choose one to eight audible layers.")
+def vocal_layers(fid, layers, params=None):
+    """Mixes the layers from the very same stem files the live preview plays (see layer_stem)."""
+    from . import tune
+    lead = need(get(fid), "audio", "video")
+    if not isinstance(layers, list) or not 1 <= len(layers) <= 10:
+        raise MediaError("Choose one to ten audible layers.")
     args, graph, outputs = [], [], []
     for i, layer in enumerate(layers):
         if not isinstance(layer, dict):
             raise MediaError("Invalid layer.")
-        source = need(get(layer.get("source") or fid), "audio")
-        args += ["-i", path_of(source)]
+        voice = layer.get("voice") or "fixed"
+        if voice not in LAYER_VOICES and voice not in tune.VOICES:
+            raise MediaError("Unknown layer voice.")
+        src = layer.get("source") or fid
+        args += ["-i", layer_stem(src, layer.get("shift"), voice, params, layer.get("seed"))]
         gain = _lin(num(layer.get("db"), -36, 6, -6))
         pan = num(layer.get("pan"), -1, 1, 0)
         delay = int(num(layer.get("delay"), 0, 5000, 0))
-        chain = _layer_chain(_layer_shift(layer.get("shift")))
-        chain += ",volume=%.8f,pan=stereo|c0=%.8f*c0|c1=%.8f*c0,adelay=%d|%d" % (gain, math.cos((pan+1)*math.pi/4), math.sin((pan+1)*math.pi/4), delay, delay)
+        if voice == "backing":   # stereo, not panned
+            chain = "aformat=sample_fmts=flt:sample_rates=%d:channel_layouts=stereo,volume=%.8f,adelay=%d|%d" % (SR, gain, delay, delay)
+        else:
+            chain = "aformat=sample_fmts=flt:sample_rates=%d:channel_layouts=mono,volume=%.8f,pan=stereo|c0=%.8f*c0|c1=%.8f*c0,adelay=%d|%d" % (
+                SR, gain, math.cos((pan + 1) * math.pi / 4), math.sin((pan + 1) * math.pi / 4), delay, delay)
         graph.append("[%d:a]%s[v%d]" % (i, chain, i))
         outputs.append("[v%d]" % i)
     graph.append("%samix=inputs=%d:duration=longest:dropout_transition=0,volume=%d,alimiter=limit=0.95:level=false[out]" % ("".join(outputs), len(layers), len(layers)))
     nid, out = new_path("wav")
     run(args + ["-filter_complex", ";".join(graph), "-map", "[out]"] + WAV + [out])
-    return register(nid, "wav", _name(lead, "vocal layers"), "vocal_layers", fid)
+    return register(nid, "wav", _name(lead, "vocal layers"), "vocal_layers", lead["id"])
+
 
 def trim(fid, start, end):
     it = need(get(fid), "audio", "video")
@@ -730,20 +758,15 @@ def _demucs():
     return _DEMUCS
 
 
-def split(fid, wanted, progress=lambda p: None):
-    """Separates a song and adds the chosen mixes (see STEMS) to the library."""
+def separate(it, progress=lambda p: None):
+    """Runs Demucs on a library item. Returns ({source name: (samples, 2) float32 array}, sample rate).
+    One separation at a time (it uses every CPU core)."""
     import torch
     from demucs.apply import apply_model
-    it = need(get(fid), "audio", "video")
-    if not it["has_audio"]:
-        raise MediaError("This video has no sound.")
-    wanted = [w for w in STEMS if w in (wanted or [])]
-    if not wanted:
-        raise MediaError("Tick at least one thing to make.")
     if it["duration"] > 20 * 60:
-        raise MediaError("Songs up to 20 minutes can be split. Trim it first.")
+        raise MediaError("Songs up to 20 minutes can be separated. Trim it first.")
     if not _split_lock.acquire(blocking=False):
-        raise MediaError("Another song is being split. Wait for it to finish.")
+        raise MediaError("Another song is being separated. Wait for it to finish.")
     tmp = os.path.join(TMP, "split-%s.wav" % secrets.token_hex(4))
     try:
         progress(0.01)
@@ -767,23 +790,34 @@ def split(fid, wanted, progress=lambda p: None):
         with torch.no_grad():
             out = apply_model(model, x, shifts=1, split=True, overlap=0.25, callback=cb)[0]
         out = out * std + mean
-        src = {name: out[k] for k, name in enumerate(model.sources)}
-        results = []
-        for w in wanted:
-            label, parts = STEMS[w]
-            mix = sum(src[p] for p in parts if p in src).numpy().T
-            peak = float(np.max(np.abs(mix))) if mix.size else 0
-            if peak > 0.99:
-                mix = mix * (0.99 / peak)
-            nid, path = new_path("wav")
-            sf.write(path, mix, sr, subtype="PCM_16")
-            if sr != SR:
-                fixed = path + ".tmp.wav"
-                run(["-i", path] + WAV + [fixed]); os.replace(fixed, path)
-            results.append(register(nid, "wav", _name(it, label), "split", it["id"]))
-        progress(1.0)
-        return results
+        return {name: out[k].numpy().T for k, name in enumerate(model.sources)}, sr
     finally:
         _split_lock.release()
         try: os.remove(tmp)
         except OSError: pass
+
+
+def split(fid, wanted, progress=lambda p: None):
+    """Separates a song and adds the chosen mixes (see STEMS) to the library."""
+    it = need(get(fid), "audio", "video")
+    if not it["has_audio"]:
+        raise MediaError("This video has no sound.")
+    wanted = [w for w in STEMS if w in (wanted or [])]
+    if not wanted:
+        raise MediaError("Tick at least one thing to make.")
+    src, sr = separate(it, progress)
+    results = []
+    for w in wanted:
+        label, parts = STEMS[w]
+        mix = sum(src[p] for p in parts if p in src)
+        peak = float(np.max(np.abs(mix))) if mix.size else 0
+        if peak > 0.99:
+            mix = mix * (0.99 / peak)
+        nid, path = new_path("wav")
+        sf.write(path, mix, sr, subtype="PCM_16")
+        if sr != SR:
+            fixed = path + ".tmp.wav"
+            run(["-i", path] + WAV + [fixed]); os.replace(fixed, path)
+        results.append(register(nid, "wav", _name(it, label), "split", it["id"]))
+    progress(1.0)
+    return results

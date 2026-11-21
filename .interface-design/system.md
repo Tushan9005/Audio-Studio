@@ -62,6 +62,16 @@ No gradients for decoration.
   a 3 px amber edge line, and a 13×36 grip tab with grooves, all *inside* the region so they're never clipped at the file edges.
   Dim outside with `::part(region){box-shadow:0 0 0 30000px rgba(13,11,9,.62)}`. Keep `pointer-events:none` on the region
   body so seek and drag-select still work.
+- **Segmented choice** (`.seg`, e.g. "Singing + guitar together / Only my voice"): same as the library filter. An `--inset`
+  track, and the checked option is `--rack-hi` with a `--wire-2` ring. Radios are visually hidden, but focus still shows.
+- **Preview command bar** (Effects, Tune, Vocal layers): eyebrow + title + live status line · quick choices · actions in
+  the order *Hear original · ▶ Live preview · primary save/render*. A running preview turns green (`--live`) and reads
+  "■ Stop preview". The status line starts with LIVE / ORIGINAL.
+- **Pitch graph** (Tune): an `--inset` well 240 px high. Lanes for the key's notes are `--wire` lines, with the key note in amber
+  at 28%. Labels use mono 10 px `--ink-4`. Sung pitch is a 1.4 px line in `--ink-2` at 45%; tuned pitch is a 2 px `--glow` line.
+  The playhead is 1.5 px `--glow-hi`. "Notes in tune" shows before (mono `--ink-2`) → after (mono `--glow-hi`).
+- **Layer row**: one line per layer. Fixed widths: name 118, voice 176, source 160, numbers 74. Inset 3 px amber accent
+  (`--cue` for the guitar/backing row). Muted or not-soloed rows drop to 55% opacity.
 - **Toast** `--rack-hi`, inset 3 px `--live` (or `--rec` for errors), fades up 6 px in 220 ms.
 - **Modal** (tuner) `--desk`, 18 radius, scale .97→1 in 200 ms.
 

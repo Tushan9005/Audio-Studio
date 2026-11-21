@@ -3,6 +3,10 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var REGION_COLOR = 'rgba(240, 162, 59, .10)';
+  // Tune: one analysis per file (key, guitar tuning, pitch) shared by the Tune and Vocal layers tabs
+  var TS = { infos: {}, keyFor: null, key: 'C', scale: 'major', strength: 100, style: 0, ref: 'guitar', scales: null, voices: null, summary: null };
+  var NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  function nice(n) { return String(n).replace('#', '♯'); }
   var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
   var fxAudioContext = null, fxSources = new WeakMap(), fxRebuildTimer = null;
 
@@ -140,7 +144,7 @@
   function showStage() { $('empty').hidden = !!S.cur; $('stage').hidden = !S.cur; }
   function select(id) {
     var f = byId(id); if (!f) return;
-    stopFxPreview(); stopLayerPreview();
+    stopFxPreview(); stopLayerPreview(); stopTunePreview();
     S.cur = id; showStage(); drawList();
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
@@ -160,7 +164,7 @@
         S.regions.on('region-created', function (r) { S.regions.getRegions().forEach(function (o) { if (o !== r) o.remove(); }); S.region = r; showSel(); });
         S.regions.on('region-update', function () { showSel(); });     // live while a handle is dragged
         S.regions.on('region-updated', function () { showSel(); });
-        S.ws.on('timeupdate', function (t) { $('time').textContent = fmt(t) + ' / ' + fmt(S.ws.getDuration()); regionEnd(t); });
+        S.ws.on('timeupdate', function (t) { $('time').textContent = fmt(t) + ' / ' + fmt(S.ws.getDuration()); regionEnd(t); if (graphStatic) drawPlayhead(); });
         S.ws.on('ready', function () { $('time').textContent = '0:00.0 / ' + fmt(S.ws.getDuration()); applyZoom(); applyRate(); if (!S.region) resetFrame(); });
         S.ws.on('interaction', function () { S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; });
         S.ws.on('play', function () { $('play').textContent = '❚❚'; });
@@ -183,7 +187,8 @@
     fxButton.disabled = !hasSound;
     fxButton.textContent = f.kind === 'video' ? 'Polish video sound → new MP4' : 'Apply effects → new copy';
     $('fxPreview').disabled = !hasSound;
-    $('lpPreview').disabled = f.kind !== 'audio';
+    $('lpPreview').disabled = !hasSound;
+    refreshTune(f);
   }
   // The whole file is always framed by two draggable handles. A frame that still covers the whole
   // file counts as "nothing selected", so Play plays everything and Trim asks you to drag first.
@@ -331,28 +336,313 @@
   });
 
   // ── tabs ──
-  function addVocalLayer(name, shift, db, pan, delay) {
-    if ($('layerTracks').children.length >= 8) { toast('Maximum eight layers.', true); return; }
-    var row = document.createElement('div'); row.className = 'layer-track';
-    row.innerHTML = '<label>Part<input class="layer-name" value="' + esc(name) + '"></label><label>Source<select data-layer="source"><option value="">Selected lead</option></select></label>' +
-      [['shift','Pitch (semitones)',-12,12,shift,1],['db','Level (dB)',-36,6,db,1],['pan','Pan (−1 left / +1 right)',-1,1,pan,.1],['delay','Start offset (ms)',0,5000,0,10]].map(function (v) { return '<label>' + v[1] + '<input type="number" data-layer="' + v[0] + '" min="' + v[2] + '" max="' + v[3] + '" value="' + v[4] + '" step="' + v[5] + '"></label>'; }).join('') + '<label class="tick"><input type="checkbox" data-layer="mute">Mute</label><label class="tick"><input type="checkbox" data-layer="solo">Solo</label><button class="btn ghost" type="button">Remove</button>';
-    S.files.filter(function (f) { return f.kind === 'audio'; }).forEach(function (f) { row.querySelector('select').add(new Option(f.name, f.id)); });
-    row.querySelector('button').onclick = function () { row.remove(); markLayersCustom(); scheduleLayerPreview(); };
-    $('layerTracks').appendChild(row);
-    row.querySelector('[data-layer="delay"]').value = delay || 0;
+  var VOICE_GROUPS = [
+    ['In key (from the Tune tab)', [['tuned', 'Your voice, tuned'], ['double', 'Double (tuned, humanised)'], ['h3up', '3rd above'], ['h4up', '4th above'], ['h5up', '5th above'], ['h6up', '6th above'], ['h8up', 'Octave above'], ['h3dn', '3rd below'], ['h4dn', '4th below'], ['h5dn', '5th below'], ['h6dn', '6th below'], ['h8dn', 'Octave below']]],
+    ['Other', [['fixed', 'Fixed shift (semitones)'], ['backing', 'Guitar & backing']]]
+  ];
+  function isSmart(v) { return v !== 'fixed' && v !== 'backing'; }
+  function layerVoiceUI(row) {
+    var v = row.querySelector('[data-layer="voice"]').value;
+    row.querySelector('.f-shift').hidden = v !== 'fixed';
+    row.querySelector('.f-source').hidden = v === 'backing';
+    var pan = row.querySelector('[data-layer="pan"]'); pan.disabled = v === 'backing'; if (v === 'backing') pan.value = 0;
+    row.classList.toggle('is-backing', v === 'backing');
   }
+  function addVocalLayer(name, voice, db, pan, delay, shift, seed) {
+    if ($('layerTracks').children.length >= 10) { toast('Maximum ten layers.', true); return; }
+    voice = voice || 'tuned';
+    var row = document.createElement('div'); row.className = 'layer-track';
+    var opts = VOICE_GROUPS.map(function (g) { return '<optgroup label="' + esc(g[0]) + '">' + g[1].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === voice ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</optgroup>'; }).join('');
+    var num = function (k, label, lo, hi, val, step, cls) { return '<label class="' + (cls || '') + '">' + label + '<input type="number" data-layer="' + k + '" min="' + lo + '" max="' + hi + '" value="' + val + '" step="' + step + '"></label>'; };
+    row.innerHTML = '<label>Part<input class="layer-name" value="' + esc(name) + '"></label>' +
+      '<label>Voice<select data-layer="voice">' + opts + '</select></label>' +
+      '<label class="f-source">Sung by<select data-layer="source"><option value="">This recording</option></select></label>' +
+      num('shift', 'Semitones', -12, 12, shift || 0, 1, 'f-shift') + num('db', 'Level (dB)', -36, 6, db, 1) + num('pan', 'Pan (−1 L / +1 R)', -1, 1, pan || 0, .1) + num('delay', 'Offset (ms)', 0, 5000, delay || 0, 10) +
+      '<input type="hidden" data-layer="seed" value="' + (seed == null ? Math.floor(Math.random() * 9000) : seed) + '">' +
+      '<label class="tick"><input type="checkbox" data-layer="mute">Mute</label><label class="tick"><input type="checkbox" data-layer="solo">Solo</label><button class="btn ghost" type="button">Remove</button>';
+    S.files.filter(function (f) { return f.kind === 'audio' && f.id !== S.cur; }).forEach(function (f) { row.querySelector('[data-layer="source"]').add(new Option(f.name, f.id)); });
+    row.querySelector('button').onclick = function () { row.remove(); markLayersCustom(); scheduleLayerPreview(); };
+    row.querySelector('[data-layer="voice"]').addEventListener('change', function () { layerVoiceUI(row); });
+    $('layerTracks').appendChild(row);
+    layerVoiceUI(row);
+  }
+  // tracks: [part, voice, level dB, pan, offset ms, semitones (fixed only), seed]. 'In key' voices follow the key
+  // and guitar tuning from the Tune tab and are built from your corrected voice, so they are always in tune.
+  var G = ['Guitar & backing', 'backing', 0, 0, 0];
   var layerArrangements = {
-    intimate: {name:'Intimate double — start here', help:'Lead plus a quiet 18 ms copy for subtle thickness. No harmony notes are added. For a true double, choose a second sung take and reset its offset to 0, then align it.', tracks:[['Lead',0,-3,0],['Soft double',0,-18,.15,18]]},
-    wide: {name:'Wide pop doubles', help:'Centered lead with quiet left/right delayed copies. Useful for a fuller chorus. Check mono compatibility; replace the copies with separate takes for natural double tracking.', tracks:[['Lead',0,-3,0],['Double left',0,-18,-.8,18],['Double right',0,-18,.8,32]]},
-    low: {name:'Warm lower octave', help:'A quiet octave below supports the lead without adding a third. Useful for gentle weight; lower the octave if it becomes muddy or artificial.', tracks:[['Lead',0,-3,0],['Lower octave',-12,-18,0]]},
-    air: {name:'Upper octave lift', help:'A very quiet octave above for a bright chorus lift. Large shifts can sound thin with the current engine; keep this layer low.', tracks:[['Lead',0,-3,0],['Upper octave',12,-21,.25]]},
-    octaves: {name:'Three octave stack', help:'Lead, lower octave and upper octave for a larger hook. The low part follows the melody, not the chord roots. Use sparingly and listen for pitch-shifting artifacts.', tracks:[['Lead',0,-3,0],['Lower octave',-12,-18,-.25],['Upper octave',12,-21,.25]]},
-    fifth: {name:'Open fifth duet — check chords', help:'Lead with a quiet +7 semitone fifth. This is a fixed parallel harmony and may clash with some notes or chords. Solo the harmony to check it.', tracks:[['Lead',0,-3,0],['Fifth',7,-15,.4]]},
-    major: {name:'Major third + fifth + bass — fixed', help:'The original four-part arrangement. +4 and +7 are fixed intervals: choosing this does not set a major key or make every note fit your song.', tracks:[['Lead',0,-3,0],['Major third',4,-12,-.5],['Fifth',7,-15,.5],['Octave bass',-12,-18,0]]},
-    minor: {name:'Minor third + fifth + bass — fixed', help:'Darker fixed +3 and +7 harmonies with a lower octave. This is not an automatic minor-key arrangement; check each phrase against your chords.', tracks:[['Lead',0,-3,0],['Minor third',3,-12,-.5],['Fifth',7,-15,.5],['Octave bass',-12,-18,0]]}
+    k_tuned: {group: 1, name: 'Tuned voice + guitar', help: 'Just your voice, pitch-corrected, with your guitar. Set how natural or robotic it sounds in the Tune tab.', tracks: [['Lead', 'tuned', 0, 0, 0], G]},
+    k_third: {group: 1, name: 'Sweet third above', help: 'A soft harmony a third above you, following the key note by note. The classic duet sound.', tracks: [['Lead', 'tuned', -1, 0, 0], ['3rd above', 'h3up', -9, .25, 0, 0, 11], G]},
+    k_sixth: {group: 1, name: 'Warm duet: sixth below', help: 'A harmony a sixth below you: warm and full, common in film-song duets.', tracks: [['Lead', 'tuned', -1, 0, 0], ['6th below', 'h6dn', -8, -.25, 0, 0, 12], G]},
+    k_pop: {group: 1, name: 'Pop stack: 3rd + 5th', help: 'Third above on the left, fifth above on the right, both following the key: a big chorus sound.', tracks: [['Lead', 'tuned', -1, 0, 0], ['3rd above', 'h3up', -10, -.4, 0, 0, 21], ['5th above', 'h5up', -12, .4, 0, 0, 22], G]},
+    k_doubles: {group: 1, name: 'Wide tuned doubles', help: 'Two slightly different tuned copies of you, left and right, so it sounds like you sang it three times.', tracks: [['Lead', 'tuned', -1, 0, 0], ['Double left', 'double', -13, -.7, 18, 0, 31], ['Double right', 'double', -13, .7, 31, 0, 32], G]},
+    k_choir: {group: 1, name: 'Choir: six voices', help: 'Doubles, a third and fifth above and an octave below, each with its own small human drift: like a small choir behind you.', tracks: [['Lead', 'tuned', -2, 0, 0], ['Double left', 'double', -14, -.6, 22, 0, 41], ['Double right', 'double', -14, .6, 35, 0, 42], ['3rd above', 'h3up', -13, -.35, 12, 0, 43], ['5th above', 'h5up', -15, .35, 16, 0, 44], ['Octave below', 'h8dn', -17, 0, 8, 0, 45], G]},
+    k_gospel: {group: 1, name: 'Gospel spread', help: 'Third and fifth above, octave above and a third below: rich and soulful. Best on long, held notes.', tracks: [['Lead', 'tuned', -1, 0, 0], ['3rd above', 'h3up', -11, -.3, 0, 0, 51], ['5th above', 'h5up', -13, .3, 0, 0, 52], ['Octave above', 'h8up', -18, 0, 10, 0, 53], ['3rd below', 'h3dn', -14, 0, 0, 0, 54], G]},
+    k_air: {group: 1, name: 'Ethereal octaves', help: 'Quiet octaves above and below plus a double: airy and dreamy, good for slow songs.', tracks: [['Lead', 'tuned', -1, 0, 0], ['Octave above', 'h8up', -16, .3, 10, 0, 61], ['Octave below', 'h8dn', -15, -.3, 14, 0, 62], ['Double', 'double', -16, 0, 25, 0, 63], G]},
+    intimate: {group: 2, name: 'Intimate double', help: 'Lead plus a quiet 18 ms copy for subtle thickness (not tuned).', tracks: [['Lead', 'fixed', -3, 0, 0], ['Soft double', 'fixed', -18, .15, 18]]},
+    wide: {group: 2, name: 'Wide pop doubles', help: 'Lead with quiet left/right delayed copies (not tuned).', tracks: [['Lead', 'fixed', -3, 0, 0], ['Double left', 'fixed', -18, -.8, 18], ['Double right', 'fixed', -18, .8, 32]]},
+    low: {group: 2, name: 'Warm lower octave', help: 'A quiet octave below (fixed shift, not tuned).', tracks: [['Lead', 'fixed', -3, 0, 0], ['Lower octave', 'fixed', -18, 0, 0, -12]]},
+    major: {group: 2, name: 'Major third + fifth + bass', help: 'Fixed +4 and +7 semitones: they do not follow your key, so some notes may clash.', tracks: [['Lead', 'fixed', -3, 0, 0], ['Major third', 'fixed', -12, -.5, 0, 4], ['Fifth', 'fixed', -15, .5, 0, 7], ['Octave bass', 'fixed', -18, 0, 0, -12]]},
+    minor: {group: 2, name: 'Minor third + fifth + bass', help: 'Fixed +3 and +7 semitones: they do not follow your key, so some notes may clash.', tracks: [['Lead', 'fixed', -3, 0, 0], ['Minor third', 'fixed', -12, -.5, 0, 3], ['Fifth', 'fixed', -15, .5, 0, 7], ['Octave bass', 'fixed', -18, 0, 0, -12]]}
   };
-  Object.keys(layerArrangements).forEach(function (key) { $('layerPreset').add(new Option(layerArrangements[key].name, key)); });
+  [['In key: always in tune (uses the Tune tab)', 1], ['Classic fixed shifts', 2]].forEach(function (g) {
+    var og = document.createElement('optgroup'); og.label = g[0];
+    Object.keys(layerArrangements).forEach(function (k) { if (layerArrangements[k].group === g[1]) og.appendChild(new Option(layerArrangements[k].name, k)); });
+    $('layerPreset').appendChild(og);
+  });
   $('layerPresetHelp').textContent = 'Choose an arrangement: it loads straight away, and plays at once if Live preview is on.';
+
+
+  // ── Tune: pitch correction ("autotune") ──
+  function tuneParams() {
+    var inf = TS.infos[S.cur];
+    return { key: TS.key, scale: TS.scale, strength: TS.strength, style: TS.style, ref: TS.ref === 'guitar' && inf ? inf.tuning_cents : 0 };
+  }
+  function tuneQuery() { var p = tuneParams(); return Object.keys(p).map(function (k) { return k + '=' + encodeURIComponent(p[k]); }).join('&'); }
+  function pollJob(jid, label) {
+    return new Promise(function (ok, fail) {
+      (function poll() {
+        api('/api/jobs/' + jid).then(function (st) {
+          if (st.done) { if (st.error) fail(new Error(st.error)); else ok(st); return; }
+          busy(true, label(st.progress, st), st.progress); setTimeout(poll, 700);
+        }).catch(fail);
+      })();
+    });
+  }
+  function analyseTune(fid, together) {
+    var f = byId(fid);
+    busy(true, 'Getting ready…', 0);
+    return post('/api/tune/prepare', { id: fid, together: together }).then(function (j) {
+      return pollJob(j.job, function (p) {
+        return (together && p < 0.86 ? 'Separating your voice from the guitar… ' : 'Measuring your pitch and key… ') + Math.round(p * 100) + '%' + (f ? ' · ' + f.name : '');
+      });
+    }).then(function (st) { TS.infos[fid] = st.result; return st.result; }).finally(function () { busy(false); });
+  }
+  // every source that an in-key voice (or the guitar) needs is analysed first; the lead uses the Tune tab choice
+  function ensureLayerAnalyses(leadOnly) {
+    var need = [];
+    var leadTogether = document.querySelector('input[name="tuTogether"]:checked').value === '1';
+    if (leadOnly) need.push([S.cur, leadTogether]);
+    else layerRows().forEach(function (r) {
+      if ((isSmart(r.voice) || r.voice === 'backing') && !TS.infos[r.src] && !need.some(function (n) { return n[0] === r.src; }))
+        need.push([r.src, r.src === S.cur ? leadTogether : false]);
+    });
+    if (!need.length || need.every(function (n) { return TS.infos[n[0]]; })) return Promise.resolve();
+    if (need.some(function (n) { return n[0] === S.cur && !TS.infos[n[0]]; }))
+      toast(leadTogether ? 'First the app separates your voice from the guitar and finds the key (once per recording).' : 'First the app measures your pitch and finds the key (once per recording).');
+    return need.reduce(function (pr, n) { return pr.then(function () { return TS.infos[n[0]] ? null : analyseTune(n[0], n[1]); }); }, Promise.resolve())
+      .then(function () { renderTuneUI(); });
+  }
+  function refreshTune(f) {
+    var hasSound = f.kind === 'audio' || (f.kind === 'video' && f.has_audio);
+    $('tuAnalyse').disabled = !hasSound;
+    if (!hasSound) { renderTuneUI(); return; }
+    api('/api/tune/info/' + f.id).then(function (j) {
+      if (!TS.scales) {
+        TS.scales = j.scales;
+        NOTE_NAMES.forEach(function (n) { $('tuKey').add(new Option(nice(n), n)); });
+        Object.keys(j.scales).forEach(function (k) { $('tuScale').add(new Option(j.scales[k], k)); });
+      }
+      if (j.info) TS.infos[f.id] = j.info; else delete TS.infos[f.id];
+      if (S.cur === f.id) renderTuneUI();
+    }).catch(function () {});
+  }
+  function renderTuneUI() {
+    var f = curFile(), inf = f && TS.infos[f.id];
+    if (inf && TS.keyFor !== f.id) { TS.keyFor = f.id; TS.key = inf.keys[0].key; TS.scale = inf.keys[0].scale; TS.ref = 'guitar'; }
+    ['tuPreview', 'tuSave'].forEach(function (k) { $(k).disabled = !inf; });
+    $('tuSettings').classList.toggle('disabled-card', !inf);
+    $('tuAnalyse').textContent = inf ? 'Analyse again' : 'Analyse my singing';
+    if (inf) document.querySelector('input[name="tuTogether"][value="' + (inf.together ? 1 : 0) + '"]').checked = true;
+    if (TS.scales) { $('tuKey').value = TS.key; $('tuScale').value = TS.scale; }
+    $('tuStrength').value = TS.strength; $('tuStrengthO').textContent = TS.strength + '%';
+    $('tuStyle').value = TS.style; $('tuStyleO').textContent = TS.style < 20 ? 'Natural' : TS.style < 70 ? 'Pop' : 'Robotic';
+    document.querySelectorAll('#tuStyles [data-style]').forEach(function (b) { b.classList.toggle('chosen', Number(b.getAttribute('data-style')) === Number(TS.style)); });
+    $('tuRefWrap').hidden = !(inf && inf.together);
+    $('tuRef').value = TS.ref;
+    if (inf && inf.together) $('tuRef').options[0].text = "your guitar's tuning (A = " + inf.guitar_a + ' Hz)';
+    if (!inf) {
+      $('tuNote').textContent = 'Analyse your recording to start.';
+      $('tuKeyNote').textContent = 'The key is detected from your guitar (or your singing). You can change it.';
+      $('tuBefore').textContent = $('tuAfter').textContent = '–'; TS.summary = null; drawTuneGraph();
+    } else {
+      var others = inf.keys.slice(1).map(function (k) { return k.label; }).join(', ');
+      $('tuKeyNote').textContent = 'Detected: ' + inf.keys[0].label + (others ? ' (also possible: ' + others + ')' : '') + '. ' +
+        (inf.together ? 'Your guitar is tuned ' + Math.abs(inf.tuning_cents) + ' cents ' + (inf.tuning_cents < 0 ? 'flat' : 'sharp') + ', so your voice is tuned to match it.' : 'Tuned to standard pitch.');
+      if (!TP) $('tuNote').textContent = 'Ready. Press Live preview, then adjust while it plays.';
+      loadTuneSummary();
+    }
+    var lk = $('layersKey');
+    lk.textContent = inf ? 'In-key voices use ' + nice(TS.key) + ' ' + (TS.scales ? TS.scales[TS.scale].split(' (')[0].toLowerCase() : TS.scale) + ' and the correction settings from the Tune tab.' :
+      'In-key arrangements analyse your singing first (once per recording).';
+  }
+  var tuneTimer = null;
+  function tuneChanged() {
+    renderTuneUI();
+    clearTimeout(tuneTimer);
+    tuneTimer = setTimeout(function () { if (TP) tpLoad(); scheduleLayerPreview(); }, 250);
+  }
+  $('tuKey').addEventListener('change', function () { TS.key = this.value; tuneChanged(); });
+  $('tuScale').addEventListener('change', function () { TS.scale = this.value; tuneChanged(); });
+  $('tuStrength').addEventListener('input', function () { TS.strength = Number(this.value); tuneChanged(); });
+  $('tuStyle').addEventListener('input', function () { TS.style = Number(this.value); tuneChanged(); });
+  $('tuRef').addEventListener('change', function () { TS.ref = this.value; tuneChanged(); });
+  $('tuStyles').addEventListener('click', function (e) { var b = e.target.closest('[data-style]'); if (!b || !TS.infos[S.cur]) return; TS.style = Number(b.getAttribute('data-style')); TS.strength = 100; tuneChanged(); });
+  $('tuAnalyse').addEventListener('click', function () {
+    var f = curFile(); if (!f) return;
+    var together = document.querySelector('input[name="tuTogether"]:checked').value === '1';
+    stopTunePreview(); stopLayerPreview();
+    TS.keyFor = null;
+    analyseTune(f.id, together).then(function (inf) {
+      renderTuneUI();
+      toast('Found ' + inf.keys[0].label + (inf.together ? ', guitar at A = ' + inf.guitar_a + ' Hz' : '') + '. Press Live preview to hear it tuned.');
+    }, function (e) { toast(e.message, true); });
+  });
+
+  // pitch graph: what you sang (grey) and the tuned pitch (amber) on the notes of the key
+  var tuneSumTimer = null, graphStatic = null;
+  function loadTuneSummary() {
+    clearTimeout(tuneSumTimer);
+    var fid = S.cur;
+    tuneSumTimer = setTimeout(function () {
+      api('/api/tune/summary/' + fid + '?' + tuneQuery()).then(function (j) {
+        if (S.cur !== fid) return;
+        TS.summary = j; $('tuBefore').textContent = j.before + '%'; $('tuAfter').textContent = j.after + '%';
+        drawTuneGraph();
+      }).catch(function (e) { toast(e.message, true); });
+    }, 120);
+  }
+  function drawTuneGraph() {
+    var cv = $('tuGraph'), wrap = cv.parentNode, j = TS.summary;
+    $('tuGraphEmpty').hidden = !!j;
+    var w = wrap.clientWidth, h = 240, dpr = window.devicePixelRatio || 1;
+    if (!w) return;
+    cv.width = w * dpr; cv.height = h * dpr; cv.style.height = h + 'px';
+    var c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    graphStatic = null;
+    if (!j || !j.t.length) return;
+    var sorted = j.sung.slice().sort(function (a, b) { return a - b; });
+    var lo = Math.floor(sorted[Math.floor(sorted.length * .02)] - 1.5), hi = Math.ceil(sorted[Math.floor(sorted.length * .98)] + 1.5);
+    var dur = Math.max(j.t[j.t.length - 1], S.ws ? S.ws.getDuration() : 0) || 1, L = 34;
+    var X = function (t) { return L + (w - L - 8) * t / dur; }, Y = function (m) { return h - 10 - (h - 20) * (m - lo) / (hi - lo); };
+    var root = NOTE_NAMES.indexOf(TS.key);
+    c.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+    j.notes.forEach(function (n) {
+      if (n < lo || n > hi) return;
+      var y = Math.round(Y(n)) + .5, isRoot = ((n % 12) + 12) % 12 === root;
+      c.strokeStyle = isRoot ? 'rgba(240,162,59,.28)' : 'rgba(255,232,205,.07)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(L, y); c.lineTo(w - 8, y); c.stroke();
+      c.fillStyle = isRoot ? '#c98a3a' : '#675d53'; c.fillText(nice(NOTE_NAMES[((n % 12) + 12) % 12]) + (Math.floor(n / 12) - 1), 2, y + 3);
+    });
+    function line(arr, colour, width) {
+      c.strokeStyle = colour; c.lineWidth = width; c.lineJoin = 'round'; c.beginPath();
+      for (var i = 0; i < arr.length; i++) {
+        var x = X(j.t[i]), y = Y(arr[i]);
+        if (i && j.t[i] - j.t[i - 1] < 0.05) c.lineTo(x, y); else c.moveTo(x, y);
+      }
+      c.stroke();
+    }
+    line(j.sung, 'rgba(200,187,170,.45)', 1.4);
+    line(j.fixed, '#f0a23b', 2);
+    graphStatic = document.createElement('canvas'); graphStatic.width = cv.width; graphStatic.height = cv.height;
+    graphStatic.getContext('2d').drawImage(cv, 0, 0);   // the still picture; the playhead is drawn on top
+    cv._map = { X: X, dur: dur, L: L, w: w };
+    drawPlayhead();
+  }
+  function drawPlayhead() {
+    var cv = $('tuGraph'); if (!graphStatic || !cv._map || !S.ws) return;
+    var c = cv.getContext('2d'), dpr = window.devicePixelRatio || 1;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, cv.width, cv.height); c.drawImage(graphStatic, 0, 0); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var x = Math.round(cv._map.X(S.ws.getCurrentTime())) + .5;
+    c.strokeStyle = '#f8b957'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(x, 0); c.lineTo(x, cv.height / dpr); c.stroke();
+  }
+  $('tuGraph').addEventListener('click', function (e) {
+    var m = this._map; if (!m || !S.ws) return;
+    var x = e.clientX - this.getBoundingClientRect().left;
+    S.ws.setTime(Math.max(0, Math.min(m.dur, (x - m.L) / (m.w - m.L - 8) * m.dur)));
+    drawPlayhead();
+  });
+  window.addEventListener('resize', function () { if (!document.querySelector('[data-p="tune"]').hidden) drawTuneGraph(); });
+
+  // live preview: the tuned song (same file Save adds) played in sync with the player; changes cross-fade in
+  var TP = null;
+  function tpMediaDirect(on) {
+    var media = TP.media, fxs = fxSources.get(media);
+    media.muted = !on;
+    if (fxs) { try { fxs.disconnect(); } catch (e) {} if (on) fxs.connect(TP.ac.destination); }
+  }
+  function tpVoice(buf, pos, fadeIn) {
+    var ac = TP.ac, v = { src: ac.createBufferSource(), gain: ac.createGain() };
+    v.src.buffer = buf; v.src.connect(v.gain); v.gain.connect(TP.bus);
+    v.gain.gain.setValueAtTime(fadeIn ? 0 : 1, ac.currentTime); if (fadeIn) v.gain.gain.linearRampToValueAtTime(1, ac.currentTime + 0.06);
+    v.src.start(0, Math.max(0, Math.min(pos, buf.duration - 0.01)));
+    return v;
+  }
+  function tpKill(v, fade) {
+    if (!v) return;
+    var ac = TP.ac;
+    if (fade) { v.gain.gain.setValueAtTime(v.gain.gain.value, ac.currentTime); v.gain.gain.linearRampToValueAtTime(0, ac.currentTime + 0.06); try { v.src.stop(ac.currentTime + 0.07); } catch (e) {} }
+    else { try { v.src.stop(); } catch (e) {} try { v.gain.disconnect(); } catch (e) {} }
+  }
+  function tpHalt() { if (!TP) return; tpKill(TP.v); TP.v = null; TP.playing = false; }
+  function tpPlay() {
+    if (!TP) return; tpHalt();
+    var pos = TP.media.currentTime; TP.t0 = TP.ac.currentTime - pos; TP.playing = true;
+    if (TP.buf) TP.v = tpVoice(TP.buf, pos, false);
+  }
+  function tpLoad() {
+    if (!TP) return;
+    var tp = TP, req = ++tp.req;
+    $('tuNote').textContent = 'LIVE · tuning…';
+    fetch('/api/tune/audio/' + encodeURIComponent(S.cur) + '?' + tuneQuery())
+      .then(function (r) { if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || (r.status === 404 ? 'Audio Studio needs a restart: close the black window and double-click Start Audio Studio.bat.' : 'Could not tune this.')); }); return r.arrayBuffer(); })
+      .then(function (ab) { return tp.ac.decodeAudioData(ab); })
+      .then(function (buf) {
+        if (TP !== tp || req !== tp.req) return;
+        tp.buf = buf;
+        if (tp.playing && !tp.media.paused) { var old = tp.v; tp.v = tpVoice(buf, tp.ac.currentTime - tp.t0, true); tpKill(old, true); }
+        if (!tp.bypass) $('tuNote').textContent = 'LIVE · change the key, strength or style while it plays.';
+      })
+      .catch(function (e) { if (TP === tp) { toast(e.message, true); stopTunePreview(); } });
+  }
+  function stopTunePreview() {
+    if (!TP) return;
+    var tp = TP; tpHalt(); clearInterval(tp.drift);
+    tp.listeners.forEach(function (x) { tp.media.removeEventListener(x[0], x[1]); });
+    try { tp.bus.disconnect(); } catch (e) {}
+    tpMediaDirect(true); tp.media.muted = tp.prevMuted;
+    TP = null;
+    $('tuPreview').classList.remove('on'); $('tuPreview').textContent = '▶ Live preview';
+    $('tuBypass').disabled = true; $('tuBypass').setAttribute('aria-pressed', 'false'); $('tuBypass').textContent = 'Hear original';
+    if (TS.infos[S.cur]) $('tuNote').textContent = 'Ready. Press Live preview, then adjust while it plays.';
+  }
+  $('tuPreview').addEventListener('click', function () {
+    if (TP) { stopTunePreview(); return; }
+    if (!S.ws || !TS.infos[S.cur]) return;
+    stopFxPreview(); stopLayerPreview();
+    try {
+      if (!fxAudioContext) fxAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      var ac = fxAudioContext, media = S.ws.getMediaElement();
+      if (S.rate !== 1) { S.rate = 1; applyRate(); }
+      var bus = ac.createGain(); bus.connect(ac.destination);
+      TP = { ac: ac, media: media, bus: bus, buf: null, v: null, playing: false, t0: 0, req: 0, bypass: false, prevMuted: media.muted, listeners: [] };
+      var on = function (ev, fn) { media.addEventListener(ev, fn); TP.listeners.push([ev, fn]); };
+      on('play', tpPlay); on('pause', tpHalt); on('ended', tpHalt);
+      on('seeked', function () { if (!media.paused) tpPlay(); });
+      TP.drift = setInterval(function () { if (TP && TP.playing && TP.v && !media.paused && Math.abs(TP.ac.currentTime - TP.t0 - media.currentTime) > 0.15) tpPlay(); }, 400);
+      tpMediaDirect(false); ac.resume();
+      this.classList.add('on'); this.textContent = '■ Stop preview'; $('tuBypass').disabled = false;
+      tpLoad();
+      if (media.paused) S.ws.play(); else tpPlay();
+    } catch (e) { stopTunePreview(); toast('Live preview could not start in this browser. Reload the page and try again.', true); }
+  });
+  $('tuBypass').addEventListener('click', function () {
+    if (!TP) return;
+    TP.bypass = !TP.bypass;
+    TP.bus.gain.setTargetAtTime(TP.bypass ? 0 : 1, TP.ac.currentTime, 0.01);
+    tpMediaDirect(TP.bypass);
+    this.setAttribute('aria-pressed', TP.bypass ? 'true' : 'false'); this.textContent = TP.bypass ? 'Hear tuned' : 'Hear original';
+    $('tuNote').textContent = TP.bypass ? 'ORIGINAL · your recording as it was.' : 'LIVE · change the key, strength or style while it plays.';
+  });
 
   // ── vocal layers: live preview ──
   // The server makes each layer's pitch-shifted voice with the SAME ffmpeg chain as the final render
@@ -364,8 +654,9 @@
     var rows = Array.from($('layerTracks').children).map(function (row) {
       var v = function (k) { return row.querySelector('[data-layer="' + k + '"]'); };
       var num = function (k, lo, hi, d) { var x = Number(v(k).value); return isFinite(x) && v(k).value !== '' ? Math.max(lo, Math.min(hi, x)) : d; };
-      var src = v('source').value || S.cur, shift = Math.round(num('shift', -12, 12, 0) * 100) / 100;
-      return { row: row, src: src, shift: shift, key: src + '|' + shift.toFixed(2), db: num('db', -36, 6, -6), pan: num('pan', -1, 1, 0),
+      var voice = v('voice').value, src = (voice === 'backing' ? '' : v('source').value) || S.cur, shift = Math.round(num('shift', -12, 12, 0) * 100) / 100, seed = v('seed').value;
+      var q = 'voice=' + voice + '&shift=' + shift + '&seed=' + seed + (isSmart(voice) ? '&' + tuneQuery() : '');
+      return { row: row, src: src, shift: shift, voice: voice, q: q, key: src + '|' + q, db: num('db', -36, 6, -6), pan: voice === 'backing' ? 0 : num('pan', -1, 1, 0),
                delay: num('delay', 0, 5000, 0) / 1000, mute: v('mute').checked, solo: v('solo').checked };
     });
     var solo = rows.some(function (r) { return r.solo; });
@@ -402,7 +693,7 @@
   function lpLoad(r) {
     LP.bufs[r.key] = 'loading';
     var lp = LP;
-    fetch('/api/layer_stem/' + encodeURIComponent(r.src) + '?shift=' + r.shift)
+    fetch('/api/layer_stem/' + encodeURIComponent(r.src) + '?' + r.q)
       .then(function (res) { if (!res.ok) return res.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || (res.status === 404 ? 'Audio Studio needs a restart to use the layer preview: close the black window and double-click Start Audio Studio.bat.' : 'Could not prepare that layer.')); }); return res.arrayBuffer(); })
       .then(function (ab) { return lp.ac.decodeAudioData(ab); })
       .then(function (buf) { if (LP !== lp) return; lp.bufs[r.key] = buf; syncLayerPreview(); })
@@ -419,8 +710,8 @@
     });
     $('layersEmpty').hidden = rows.length > 0;
     if (!LP.bypass) $('lpNote').textContent = !rows.length ? 'LIVE · add or load layers to hear them.' :
-      waiting.length ? 'LIVE · preparing ' + waiting.map(function (r) { return (r.shift > 0 ? '+' : '') + r.shift + ' semitones'; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ') + '…' :
-      'LIVE · change pitch, level, pan, offset, mute or solo while it plays.';
+      waiting.length ? 'LIVE · preparing ' + waiting.length + ' voice' + (waiting.length > 1 ? 's' : '') + '…' :
+      'LIVE · change voices, levels, pan, offset, mute or solo while it plays.';
     if (!LP.playing) return;
     var pos = LP.ac.currentTime - LP.t0, keep = [];
     LP.voices.forEach(function (v) {
@@ -453,10 +744,13 @@
   }
   $('lpPreview').addEventListener('click', function () {
     if (LP) { stopLayerPreview(); return; }
-    var f = curFile();
-    if (!f || f.kind !== 'audio' || !S.ws || !S.ws.getMediaElement) { toast('Select a vocals-only sound file first.', true); return; }
-    if (!$('layerTracks').children.length) { toast('Load an arrangement or add a layer first.', true); return; }
-    stopFxPreview();
+    var f = curFile(), btn = this;
+    if (!f || !S.ws || !S.ws.getMediaElement) { toast('Select your recording first.', true); return; }
+    if (!$('layerTracks').children.length) { toast('Choose an arrangement or add a layer first.', true); return; }
+    ensureLayerAnalyses().then(function () { startLayerPreview(btn); }, function (e) { toast(e.message, true); });
+  });
+  function startLayerPreview(btn) {
+    stopFxPreview(); stopTunePreview();
     try {
       if (!fxAudioContext) fxAudioContext = new (window.AudioContext || window.webkitAudioContext)();
       var ac = fxAudioContext, media = S.ws.getMediaElement();
@@ -472,18 +766,18 @@
         if (LP && LP.playing && !media.paused && Math.abs(LP.ac.currentTime - LP.t0 - media.currentTime) > 0.15) lpPlay();   // seeks and loops re-sync at once via "seeked"
       }, 400);
       lpMediaDirect(false); ac.resume();
-      this.classList.add('on'); this.textContent = '■ Stop preview'; $('lpBypass').disabled = false;
+      btn.classList.add('on'); btn.textContent = '■ Stop preview'; $('lpBypass').disabled = false;
       syncLayerPreview();
       if (media.paused) S.ws.play(); else lpPlay();
     } catch (e) { stopLayerPreview(); toast('Live preview could not start in this browser. Reload the page and try again.', true); }
-  });
+  }
   $('lpBypass').addEventListener('click', function () {
     if (!LP) return;
     LP.bypass = !LP.bypass;
     LP.bus.gain.setTargetAtTime(LP.bypass ? 0 : 1, LP.ac.currentTime, 0.01);
     lpMediaDirect(LP.bypass);
     this.setAttribute('aria-pressed', LP.bypass ? 'true' : 'false'); this.textContent = LP.bypass ? 'Hear layers' : 'Hear original';
-    $('lpNote').textContent = LP.bypass ? 'ORIGINAL · the selected file on its own, for comparison.' : 'LIVE · change pitch, level, pan, offset, mute or solo while it plays.';
+    $('lpNote').textContent = LP.bypass ? 'ORIGINAL · the selected file on its own, for comparison.' : 'LIVE · change voices, levels, pan, offset, mute or solo while it plays.';
     if (!LP.bypass) syncLayerPreview();
   });
   // Arrangements load as soon as they are picked. Once you change a layer yourself the dropdown shows
@@ -497,8 +791,14 @@
   }
   function applyArrangement(key) {
     var preset = layerArrangements[key]; if (!preset) return;
+    var smart = preset.tracks.some(function (v) { return v[1] !== 'fixed'; });
+    if (smart && !TS.infos[S.cur]) {   // in-key voices need the singing analysed first: do it now, then apply
+      ensureLayerAnalyses(true).then(function () { applyArrangement(key); }, function (e) { toast(e.message, true); $('layerPreset').value = ''; });
+      return;
+    }
+    var together = TS.infos[S.cur] && TS.infos[S.cur].together;
     $('layerTracks').replaceChildren();
-    preset.tracks.forEach(function (v) { addVocalLayer.apply(null, v); });
+    preset.tracks.forEach(function (v) { if (v[1] !== 'backing' || together) addVocalLayer(v[0], v[1], v[2], v[3], v[4], v[5], v[6] == null ? 0 : v[6]); });
     layersCustom = false; layersFrom = preset.name;
     $('layerPreset').querySelector('option[value="custom"]').hidden = true; $('layerPreset').value = key;
     $('layerPresetHelp').textContent = preset.help;
@@ -519,6 +819,7 @@
     var b = e.target.closest('button[data-t]'); if (!b) return;
     document.querySelectorAll('.tabs button').forEach(function (x) { x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
     document.querySelectorAll('.panel').forEach(function (p) { p.hidden = p.getAttribute('data-p') !== b.getAttribute('data-t'); });
+    if (b.getAttribute('data-t') === 'tune') drawTuneGraph();
   });
 
   // ── sliders show their values ──
@@ -716,7 +1017,7 @@
   }
   $('fxPreview').addEventListener('click', function () {
     if (S.fxPreview) { stopFxPreview(); return; }
-    stopLayerPreview();
+    stopLayerPreview(); stopTunePreview();
     if (!S.ws || !S.ws.getMediaElement) { toast('Select an audio file or a video with sound first.', true); return; }
     var media = S.ws.getMediaElement();
     try {
@@ -733,20 +1034,27 @@
 
   // ── run a tool ──
   var MSG = { effects: 'Applying effects…', effects_video: 'Polishing the sound and rebuilding your video…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',
-              voice: 'Making the voiceover…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', best: 'Finding the best part…', export: 'Saving…' };
+              voice: 'Making the voiceover…', tune: 'Saving your tuned version…', vocal_layers: 'Mixing your vocal layers…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', best: 'Finding the best part…', export: 'Saving…' };
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-do]'); if (!b || b.disabled) return;
     var a = b.getAttribute('data-do'), f = curFile();
     if (a === 'effects' && f && f.kind === 'video') a = 'effects_video';
     if (!f && !b.hasAttribute('data-any') && a !== 'join' && a !== 'beat_reel') { toast('Select a file in the library first.', true); return; }
     var body = { id: f ? f.id : null };
+    if (a === 'tune') {
+      if (!TS.infos[f.id]) { toast('Analyse your singing first.', true); return; }
+      Object.assign(body, tuneParams()); stopTunePreview();
+    }
     if (a === 'vocal_layers') {
-      if (!f || f.kind !== 'audio') { toast('Select a vocals-only audio file first.', true); return; }
+      if (!f || !S.ws) { toast('Select your recording first.', true); return; }
+      body.tune = tuneParams();
       var tracks = Array.from($('layerTracks').children).map(function (row) { var t = {}; row.querySelectorAll('[data-layer]').forEach(function (el) { t[el.dataset.layer] = el.type === 'checkbox' ? el.checked : el.value; }); return t; });
       var solo = tracks.some(function (t) { return t.solo; });
       body.layers = tracks.filter(function (t) { return !t.mute && (!solo || t.solo); });
       if (!body.layers.length) { toast('Add at least one audible layer.', true); return; }
       stopFxPreview(); stopLayerPreview();
+      ensureLayerAnalyses().then(function () { runTool(a, body); }, function (e) { toast(e.message, true); });
+      return;
     }
     if (a === 'trim' || a === 'cut') {
       var s = parseFloat($('selS').value), en = parseFloat($('selE').value);
@@ -774,6 +1082,10 @@
       if (!body.music) { toast('Add a song to the library first.', true); return; }
     }
     if (a === 'voice') { body.text = $('vText').value; body.voice = $('vVoice').value; body.speed = $('vSpeed').value; body.music = $('vMusic').value; body.music_db = $('vMdb').value; body.music_from = $('vFrom').value; }
+    runTool(a, body);
+  });
+
+  function runTool(a, body) {
     busy(true, MSG[a]);
     post('/api/do/' + a, body).then(function (j) {
       if (j.sound_check) {
@@ -782,10 +1094,10 @@
         return;
       }
       if (j.analysis) { showStats(j.analysis); return; }
-      toast('Done: "' + j.file.name + '" added to the library.');
+      toast(j.files && j.files.length > 1 ? 'Done: ' + j.files.length + ' files added (' + j.files.map(function (x) { return '"' + x.name + '"'; }).join(', ') + ').' : 'Done: "' + j.file.name + '" added to the library.');
       return load(j.file.id);
     }).catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); });
-  });
+  }
 
   function showStats(a) {
     var lufs = a.lufs, adv = lufs == null ? '' : (lufs < -18 ? 'quiet for Instagram/YouTube: try Loudness -14 in Effects' : (lufs > -11 ? 'very loud: may be turned down by apps' : 'good level for Instagram/YouTube'));

@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import media, ops
+from . import media, ops, tune
 from .media import MediaError
 
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -112,10 +112,40 @@ def download(fid: str):
     return FileResponse(media.path_of(it), filename="%s.%s" % (it["name"], it["ext"]))
 
 
+def _tune_params(q):
+    return {k: q.get(k) for k in ("key", "scale", "strength", "style", "ref")}
+
+
 @app.get("/api/layer_stem/{fid}")
-def layer_stem(fid: str, shift: float = 0):
-    """A vocal layer's pitch-shifted voice for the live preview (same ffmpeg chain as the final render)."""
-    return FileResponse(ops.layer_stem(fid, shift), media_type="audio/wav")
+def layer_stem(fid: str, request: Request):
+    """One vocal layer's audio for the live preview: the same file the final render mixes."""
+    q = request.query_params
+    return FileResponse(ops.layer_stem(fid, q.get("shift"), q.get("voice") or "fixed", _tune_params(q), q.get("seed")), media_type="audio/wav")
+
+
+# ── tune (pitch correction) ──
+@app.get("/api/tune/info/{fid}")
+def tune_info(fid: str):
+    media.get(fid)
+    return {"info": tune.info(fid), "scales": {k: v[0] for k, v in tune.SCALES.items()}, "voices": {k: v[0] for k, v in tune.VOICES.items()}}
+
+
+@app.post("/api/tune/prepare")
+async def tune_prepare(request: Request):
+    p = await request.json()
+    ops.need(media.get(p.get("id")), "audio", "video")
+    return {"job": _start_job(lambda progress: tune.prepare(p.get("id"), p.get("together"), progress))}
+
+
+@app.get("/api/tune/summary/{fid}")
+def tune_summary(fid: str, request: Request):
+    return tune.summary(fid, _tune_params(request.query_params))
+
+
+@app.get("/api/tune/audio/{fid}")
+def tune_audio(fid: str, request: Request):
+    """The tuned song (voice + guitar) for the live preview: the same file Save adds to the library."""
+    return FileResponse(tune.mix(fid, _tune_params(request.query_params)), media_type="audio/wav")
 
 
 # ── tools ──
@@ -124,7 +154,7 @@ async def do(action: str, request: Request):
     p = await request.json()
     f = p.get("id")
     acts = {
-        "vocal_layers": lambda: ops.vocal_layers(f, p.get("layers")),
+        "vocal_layers": lambda: ops.vocal_layers(f, p.get("layers"), p.get("tune")),
         "trim": lambda: ops.trim(f, p.get("start"), p.get("end")),
         "cut": lambda: ops.cut_out(f, p.get("start"), p.get("end")),
         "fade": lambda: ops.fades(f, p.get("fade_in"), p.get("fade_out")),
@@ -143,6 +173,9 @@ async def do(action: str, request: Request):
     }
     if action == "analyse":
         return {"analysis": await run_in_threadpool(ops.analyse, f)}
+    if action == "tune":
+        files = await run_in_threadpool(tune.save, f, p)
+        return {"file": files[0], "files": files}
     if action == "sound_check":
         return {"sound_check": await run_in_threadpool(ops.sound_check, f)}
     if action not in acts:
@@ -158,12 +191,17 @@ JOBS = {}
 async def split(request: Request):
     p = await request.json()
     ops.need(media.get(p.get("id")), "audio", "video")
+    return {"job": _start_job(lambda progress: ops.split(p.get("id"), p.get("stems") or [], progress=progress), key="files")}
+
+
+def _start_job(fn, key="result"):
+    """Runs fn(progress) in a background thread; the page polls /api/jobs/<id> for progress and the result."""
     jid = secrets.token_hex(6)
-    job = JOBS[jid] = {"progress": 0.0, "done": False, "error": None, "files": [], "started": time.time()}
+    job = JOBS[jid] = {"progress": 0.0, "done": False, "error": None, "files": [], "result": None, "started": time.time()}
 
     def work():
         try:
-            job["files"] = ops.split(p.get("id"), p.get("stems") or [], progress=lambda x: job.update(progress=round(x, 3)))
+            job[key] = fn(lambda x: job.update(progress=round(x, 3)))
         except MediaError as e:
             job["error"] = str(e)
         except Exception as e:
@@ -174,7 +212,7 @@ async def split(request: Request):
     threading.Thread(target=work, daemon=True).start()
     for k in [k for k, j in JOBS.items() if j["done"] and time.time() - j["started"] > 3600]:
         JOBS.pop(k, None)
-    return {"job": jid}
+    return jid
 
 
 @app.get("/api/jobs/{jid}")

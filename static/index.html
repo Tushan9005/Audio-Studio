@@ -65,6 +65,7 @@
         <button role="tab" data-t="edit" aria-selected="true">Edit</button>
         <button role="tab" data-t="practice" aria-selected="false">Practice</button>
         <button role="tab" data-t="fx" aria-selected="false">Effects</button>
+        <button role="tab" data-t="tune" aria-selected="false">Tune</button>
         <button role="tab" data-t="layers" aria-selected="false">Vocal layers</button>
         <button role="tab" data-t="video" aria-selected="false">Video</button>
         <button role="tab" data-t="voice" aria-selected="false">Voice</button>
@@ -156,6 +157,57 @@
         </div>
       </div>
 
+      <!-- TUNE (pitch correction) -->
+      <div class="panel" data-p="tune" hidden>
+        <section class="fx-commandbar" aria-label="Pitch correction controls">
+          <div class="fx-command-copy">
+            <span class="fx-eyebrow">Pitch correction</span>
+            <strong>Tune my singing</strong>
+            <p id="tuNote">Analyse your recording to start.</p>
+          </div>
+          <div class="fx-command-presets">
+            <span class="fx-group-label">Sound</span>
+            <div class="cover-choices" id="tuStyles">
+              <button class="btn" type="button" data-style="0">Natural <small>keeps your vibrato</small></button>
+              <button class="btn" type="button" data-style="40">Pop <small>tighter</small></button>
+              <button class="btn" type="button" data-style="100">Robotic <small>the effect</small></button>
+            </div>
+          </div>
+          <div class="fx-actions">
+            <button class="btn" id="tuBypass" type="button" disabled aria-pressed="false" title="Hear your recording as it was">Hear original</button>
+            <button class="btn big" id="tuPreview" type="button" disabled>▶ Live preview</button>
+            <button class="btn primary big" id="tuSave" data-do="tune" disabled>Save tuned version</button>
+          </div>
+        </section>
+        <div class="grid tune-grid">
+          <div class="card">
+            <h3>1 · Your recording</h3>
+            <div class="seg" role="radiogroup" aria-label="What is in this recording">
+              <label class="tick"><input type="radio" name="tuTogether" value="1" checked> Singing + guitar together</label>
+              <label class="tick"><input type="radio" name="tuTogether" value="0"> Only my voice</label>
+            </div>
+            <p class="note" id="tuSetupNote">With guitar, the app first separates your voice (about a third of the song's length), then tunes your voice to your guitar's own tuning. The guitar itself is never changed.</p>
+            <div class="row"><button class="btn primary" id="tuAnalyse" type="button">Analyse my singing</button></div>
+          </div>
+          <div class="card" id="tuSettings">
+            <h3>2 · Key &amp; correction</h3>
+            <div class="row"><label>Key <select id="tuKey"></select></label><label>Scale <select id="tuScale"></select></label></div>
+            <p class="note" id="tuKeyNote">The key is detected from your guitar's chords. Change it if your song is in a different key.</p>
+            <label class="slide">Correction strength <input type="range" id="tuStrength" min="0" max="100" step="5" value="100"><output id="tuStrengthO">100%</output></label>
+            <label class="slide">Natural ↔ Robotic <input type="range" id="tuStyle" min="0" max="100" step="5" value="0"><output id="tuStyleO">Natural</output></label>
+            <label id="tuRefWrap">Tune to <select id="tuRef"><option value="guitar">your guitar's tuning</option><option value="440">standard pitch (A = 440 Hz)</option></select></label>
+          </div>
+        </div>
+        <div class="card pitch-card">
+          <div class="pitch-head">
+            <h3>Your pitch</h3>
+            <div class="tu-score" aria-live="polite"><span>Notes in tune</span><b id="tuBefore">–</b><span class="arrow">→</span><b id="tuAfter" class="after">–</b></div>
+          </div>
+          <div class="pitch-wrap"><canvas id="tuGraph" aria-label="Graph of the sung pitch and the corrected pitch"></canvas><p class="pitch-empty" id="tuGraphEmpty">Your pitch appears here after the analysis.</p></div>
+          <p class="note"><span class="key-sung"></span> what you sang · <span class="key-fixed"></span> after tuning · lines are the notes of the key. Click the graph to jump there.</p>
+        </div>
+      </div>
+
       <!-- VOCAL LAYERS -->
       <div class="panel" data-p="layers" hidden>
         <section class="fx-commandbar" aria-label="Vocal layer controls">
@@ -178,6 +230,7 @@
           <div class="layers-head"><p class="note" id="layerPresetHelp" aria-live="polite"></p><button class="btn" id="layerAdd" type="button">+ Add layer</button></div>
           <div id="layerTracks"></div>
           <p class="layers-empty" id="layersEmpty">No layers yet. Choose an arrangement above (it loads straight away), or add a layer.</p>
+          <p class="note layers-key" id="layersKey"></p>
           <details class="tips"><summary>How layers work &amp; tips</summary>
             <p class="note">1. Select a vocals-only audio file in the library (Split song in Practice can make one). 2. Load an arrangement or add layers, then press Live preview and adjust while it plays. 3. Render the mix, then use Effects for reverb and Edit → Save as to export.</p>
             <p class="note">These are starting settings based on common production techniques, not copies of any artist's sound. Artificial doubles are delayed copies, so check that the mix doesn't sound hollow or phasey. Separately sung takes usually sound more natural: choose them as a layer's Source.</p>

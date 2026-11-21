@@ -43,6 +43,7 @@ packaging==26.3
 phonemizer==3.6.0
 platformdirs==4.14.8
 pooch==1.9.0
+praat-parselmouth==0.4.7
 protobuf==7.36.2
 pycparser==3.12
 pydantic==2.14.4

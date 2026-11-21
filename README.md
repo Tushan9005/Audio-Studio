@@ -1,7 +1,7 @@
 # Audio Studio
 
 A private music, voice and video-sound workshop that runs only on this PC (http://127.0.0.1:8765).
-Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice (offline), Demucs (song splitting), wavesurfer.js.
+Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice (offline), Demucs (song splitting), Praat via praat-parselmouth (pitch correction), wavesurfer.js.
 
 **Start:** double-click `Start Audio Studio.bat`. Close the black window to stop.
 
@@ -19,6 +19,14 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   **Split song:** vocals only, guitar only, karaoke (no vocals), backing without guitar, drums, bass
   (Demucs htdemucs_6s on the CPU, roughly half the song's length; model cached in
   `%USERPROFILE%\.cache\huggingface`, loaded offline after the first download).
+- **Tune (pitch correction / autotune):** for a recording of singing + guitar together, the voice is first
+  separated from the guitar (Demucs), then each sung note is moved onto the nearest note of the key (Praat PSOLA,
+  keeps the voice's character). The key is detected from the guitar; the voice is tuned to the guitar's *own*
+  tuning. Natural (keeps vibrato) ↔ Robotic, strength, 7 scales incl. raag-like modes, live preview, pitch graph,
+  "notes in tune" before → after. Saves the tuned song (MP4 for a video) and the tuned voice alone.
+- **Vocal layers:** in-key harmonies made from the tuned voice (3rd/4th/5th/6th/octave above or below, humanised
+  doubles) plus the separated guitar; arrangements (sweet third, sixth-below duet, pop stack, choir, gospel,
+  ethereal octaves) load on selection; live preview = the exact files the render mixes.
 - **Effects:** gentle tracked-noise reduction (no noise gate, so guitar decay is preserved), 50 Hz hum
   removal, low cut, de-esser, tone/boxiness EQ, compression,
   natural stereo convolution reverb with pre-delay, brightness and room size, echo, stereo width,

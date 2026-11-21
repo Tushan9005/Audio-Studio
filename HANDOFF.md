@@ -154,3 +154,30 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   The render also lags 219 samples behind its input because of alimiter's 5 ms look-ahead (same for every layer,
   inaudible).
 - The layers preview forces 100 % speed, and starting either preview (Effects or Layers) stops the other.
+
+## Tune: pitch correction + key-aware harmonies (21 Nov 2026)
+- New dependency: `praat-parselmouth` 0.4.7 (Praat 6.1.38) for pitch analysis and PSOLA re-synthesis.
+- `app/tune.py` (read its docstring). `prepare(fid, together)` is a background job (`POST /api/tune/prepare` → `/api/jobs`).
+  With together=True it runs `ops.separate()` (Demucs, shared with Split song) → `tmp/tune/<id>/vocals.wav` (mono) +
+  `backing.wav` (stereo), then the Praat pitch contour (`contour.npy`), the guitar's tuning (librosa) and the key.
+  **The key comes from the guitar's chroma only** when there is a guitar: the sung notes are what's being corrected,
+  so letting them vote picked D♯ major instead of G♯ minor on the owner's recording.
+- **The owner's guitar is tuned ~18–20 cents flat (A ≈ 435 Hz).** Correction is relative to that (`ref` param)
+  unless "standard pitch" is chosen, otherwise the voice would clash with the guitar.
+- Correction (`curves`): split the singing into notes (`_segments`: 70 ms median, scale-note hysteresis 0.65 st,
+  blips <60 ms merged, centre = median of the note's middle 60%), shift each whole note onto its target (Natural,
+  keeps vibrato) blended toward flat target notes (Robotic), 60→10 ms glides. Measured on the owner's real recording
+  by re-analysing the output: per-note error 36 c → 0–1 c, notes within 15 c 14% → 100%, vibrato kept (21 → 20 c
+  std) in Natural. Harmonies (`voice(kind)`) use scale steps from the target notes (3rd above = +3/+4 as the key
+  needs), built on the fully corrected voice, with a seeded humanising drift.
+- Endpoints: `/api/tune/info|summary|audio/<id>`, `POST /api/do/tune` (saves tuned song + tuned voice).
+  Layer stems: `/api/layer_stem/<id>?voice=…&seed=…&key=…` → `ops.layer_stem()`. Voices: `fixed` (ffmpeg shift; uses the
+  separated vocal once analysed), `backing` (the separated guitar, stereo, never panned), or any `tune.VOICES` key.
+  `ops.vocal_layers()` now mixes those same stem files, so layer preview = render by construction.
+- UI: Tune tab (TS state shared with Layers; TP = its synced preview, cross-fades on every change; canvas pitch graph
+  with playhead and click-to-seek). Layers rows have a Voice select; in-key arrangements analyse the recording first
+  if needed (`ensureLayerAnalyses`). Starting any of the three previews stops the others.
+- Caches: `tmp/tune/<id>/r-*.wav` (renders, last 24 kept), Manipulation objects in memory (last 3 files).
+- Known limits: correction moves notes to the key's notes, so a deliberate out-of-key note gets moved (use "All 12
+  notes"); a note sung more than about a semitone off can land on the neighbouring note; it fixes pitch, not timing;
+  PSOLA harmonies a 5th+ away sound a little processed (kept quieter in the arrangements).
