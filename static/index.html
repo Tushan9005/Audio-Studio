@@ -10,19 +10,20 @@
 <body>
 <header class="top">
   <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 18v-4M11 22V10M15 25V7M19 20v-8M23 23V9M27 17v-2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg> Audio Studio</div>
-  <div class="top-right"><span class="top-note">Runs only on this PC · files stay in <code>audio-studio\workspace</code></span>
-  <button class="btn small" id="tunerBtn" type="button">🎸 Tuner</button></div>
+  <div class="top-right"><span class="top-note"><span class="dot-live" aria-hidden="true"></span>Private · runs only on this PC</span>
+  <button class="btn small" id="tunerBtn" type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16 12.5 7.5M11 4l5 5M13.5 2.5l4 4M3 17l2-1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="6" cy="14" r="2.4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Tuner</button></div>
 </header>
 
 <div class="layout">
   <aside class="lib">
     <div class="lib-actions">
-      <label class="btn primary" for="up">⬆ Add files</label>
+      <label class="btn primary" for="up"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 14V4M5.5 8.5 10 4l4.5 4.5M4 16h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Add files</label>
       <input id="up" type="file" multiple accept="audio/*,video/*,image/*" hidden>
-      <button class="btn rec" id="recBtn" type="button">● Record</button>
+      <button class="btn rec" id="recBtn" type="button"><span class="rec-dot" aria-hidden="true"></span>Record</button>
     </div>
     <div class="rec-bar" id="recBar" hidden><span class="dot"></span><span id="recTime">0:00</span><canvas id="recMeter" width="120" height="22"></canvas><button class="btn small" id="recStop" type="button">■ Stop</button></div>
-    <div class="drop" id="drop">or drop sound, video and photo files here</div>
+    <div class="drop" id="drop">or drop songs, videos and photos here</div>
+    <div class="lib-head"><span>Library</span><span id="libCount"></span></div>
     <div class="chips" role="group" aria-label="Show">
       <button type="button" data-k="all" aria-pressed="true">All</button>
       <button type="button" data-k="audio" aria-pressed="false">Sound</button>
@@ -35,25 +36,27 @@
 
   <main class="main">
     <section class="empty" id="empty">
-      <h1>Start by adding a song, a video or a recording</h1>
-      <p>Then trim it, add effects, put music under a video, make a beat-synced reel, or create a voiceover.</p>
+      <svg class="empty-mark" viewBox="0 0 120 48" aria-hidden="true"><path d="M4 24h6M16 18v12M22 10v28M28 16v16M34 6v36M40 14v20M46 20v8M52 12v24M58 4v40M64 15v18M70 9v30M76 19v10M82 13v22M88 7v34M94 17v14M100 21v6M106 24h10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+      <h1>Add a song, a cover video or a recording</h1>
+      <p>Then trim it, practise along, polish your voice and guitar, split it into parts, or turn it into a Reel.</p>
+      <div class="empty-actions"><label class="btn primary big" for="up">Add files</label><button class="btn big" type="button" onclick="document.getElementById('recBtn').click()">Record now</button></div>
     </section>
 
     <section class="stage" id="stage" hidden>
       <div class="file-head">
         <input class="fname" id="fname" aria-label="File name">
         <span class="meta" id="fmeta"></span>
-        <a class="btn small" id="dl" href="#">⬇ Download</a>
-        <button class="btn small ghost" id="del" type="button">Delete</button>
+        <a class="btn small" id="dl" href="#"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v10M5.5 9.5 10 14l4.5-4.5M4 17h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+        <button class="btn small ghost danger" id="del" type="button">Delete</button>
       </div>
       <div class="player">
         <video id="vid" controls playsinline hidden></video>
         <img id="img" alt="" hidden>
         <div id="wave"></div>
         <div class="transport" id="transport">
-          <button class="btn round" id="play" type="button" aria-label="Play">▶</button>
+          <button class="btn round" id="play" type="button" aria-label="Play / pause (Space)">▶</button>
           <span class="time" id="time">0:00.0 / 0:00.0</span><span class="rate-tag" id="rateTag" hidden></span>
-          <span class="sel" id="selInfo">Drag on the waveform to select a part</span>
+          <span class="sel" id="selInfo"></span>
           <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="300" value="0"></label>
         </div>
       </div>
@@ -70,11 +73,32 @@
 
       <!-- EDIT -->
       <div class="panel" data-p="edit">
-        <div class="grid">
-          <div class="card"><h3>Selection</h3>
-            <div class="row"><label>From <input type="number" id="selS" step="0.1" min="0"></label><label>To <input type="number" id="selE" step="0.1" min="0"></label></div>
-            <div class="row"><button class="btn" data-do="trim">Keep only this part</button><button class="btn" data-do="cut" data-audio>Remove this part</button></div>
+        <div class="card trim-card" id="trimCard">
+          <div class="trim-head">
+            <h3>Trim</h3>
+            <p class="note" id="trimHint">Drag the amber handles at either end of the waveform. Keys: <kbd>[</kbd> start here · <kbd>]</kbd> end here · <kbd>Space</kbd> play</p>
           </div>
+          <div class="trim-counters">
+            <div class="counter">
+              <span class="k">Start</span><b id="trS">–</b>
+              <div class="nudge" role="group" aria-label="Adjust start"><button type="button" data-nudge="start" data-by="-0.1" aria-label="Start 0.1 seconds earlier">−0.1</button><button type="button" data-nudge="start" data-by="0.1" aria-label="Start 0.1 seconds later">+0.1</button><button type="button" data-here="start">At playhead</button></div>
+            </div>
+            <div class="counter keep"><span class="k">Keeps</span><b id="trL">–</b><span class="sub" id="trCut"></span></div>
+            <div class="counter">
+              <span class="k">End</span><b id="trE">–</b>
+              <div class="nudge" role="group" aria-label="Adjust end"><button type="button" data-nudge="end" data-by="-0.1" aria-label="End 0.1 seconds earlier">−0.1</button><button type="button" data-nudge="end" data-by="0.1" aria-label="End 0.1 seconds later">+0.1</button><button type="button" data-here="end">At playhead</button></div>
+            </div>
+          </div>
+          <div class="trim-actions">
+            <button class="btn primary" data-do="trim">Keep only this part</button>
+            <button class="btn" data-do="cut" data-audio>Remove this part</button>
+            <button class="btn ghost" id="trReset" type="button">Reset handles</button>
+            <details class="exact"><summary>Type exact times</summary>
+              <div class="row"><label>From (s) <input type="number" id="selS" step="0.1" min="0"></label><label>To (s) <input type="number" id="selE" step="0.1" min="0"></label></div>
+            </details>
+          </div>
+        </div>
+        <div class="grid">
           <div class="card" data-audio><h3>Fades</h3>
             <div class="row"><label>Fade in (s) <input type="number" id="fadeIn" value="1" step="0.5" min="0" max="30"></label><label>Fade out (s) <input type="number" id="fadeOut" value="3" step="0.5" min="0" max="30"></label></div>
             <button class="btn" data-do="fade">Apply fades</button>
@@ -132,7 +156,7 @@
         </div>
       </div>
 
-      <!-- EFFECTS -->
+      <!-- VOCAL LAYERS -->
       <div class="panel" data-p="layers" hidden>
         <div class="card">
           <h3>Arrange your vocal layers</h3>

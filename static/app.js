@@ -2,11 +2,12 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
+  var REGION_COLOR = 'rgba(240, 162, 59, .10)';
   var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
   var fxAudioContext = null, fxSources = new WeakMap(), fxRebuildTimer = null;
 
   // ── helpers ──
-  function fmt(t) { t = Math.max(0, t || 0); var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
+  function fmt(t) { t = Math.round(Math.max(0, t || 0) * 10) / 10; var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function toast(msg, err) {
     var t = $('toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
@@ -53,7 +54,8 @@
         '<input type="checkbox" aria-label="Tick ' + esc(f.name) + '"' + (ti >= 0 ? ' checked' : '') + ' title="' + (ti >= 0 ? 'Ticked #' + (ti + 1) : 'Tick') + '">' +
         '<span class="ic ' + f.kind + '">' + icon[f.kind] + '</span><span><div class="nm">' + esc(f.name) + '</div><div class="sub">' + esc(sub) + '</div></span></li>';
     }).join('');
-    $('files').innerHTML = html || '<li style="cursor:default;color:var(--mute)">Nothing here yet.</li>';
+    $('files').innerHTML = html || '<li class="none">Nothing here yet. Add a song or press Record.</li>';
+    $('libCount').textContent = S.files.length ? S.files.length + (S.files.length === 1 ? ' file' : ' files') : '';
   }
   function fillMusic() {
     document.querySelectorAll('.music-pick').forEach(function (sel) {
@@ -125,7 +127,7 @@
       };
       (function meter() {
         an.getFloatTimeDomainData(buf); var pk = 0; for (var i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i]));
-        cv.clearRect(0, 0, 120, 22); cv.fillStyle = pk > 0.95 ? '#ef4444' : (pk > 0.7 ? '#f59e0b' : '#22c55e'); cv.fillRect(0, 6, 120 * Math.min(1, pk), 10);
+        cv.clearRect(0, 0, 120, 22); cv.fillStyle = pk > 0.95 ? '#e8634f' : (pk > 0.7 ? '#f0a23b' : '#67c48a'); cv.fillRect(0, 6, 120 * Math.min(1, pk), 10);
         var s = Math.floor((Date.now() - t0) / 1000); $('recTime').textContent = Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2);
         rec.raf = requestAnimationFrame(meter);
       })();
@@ -149,16 +151,17 @@
     $('transport').hidden = f.kind === 'image'; $('wave').hidden = f.kind === 'image' || (f.kind === 'video' && !f.has_audio);
     if (f.kind === 'image') { img.src = '/media/' + id; vid.removeAttribute('src'); }
     else {
-      var opts = { container: '#wave', height: 128, waveColor: '#4b5563', progressColor: '#f59e0b', cursorColor: '#fbbf24', barWidth: 2, barGap: 1, barRadius: 2, normalize: true };
+      var opts = { container: '#wave', height: 140, waveColor: '#5b5047', progressColor: '#f0a23b', cursorColor: '#f8b957', cursorWidth: 2, barWidth: 2, barGap: 1, barRadius: 2, normalize: true };
       if (f.kind === 'video') { vid.src = '/media/' + id; opts.media = vid; } else { opts.url = '/media/' + id; }
       if (f.kind === 'audio' || f.has_audio) {
         S.ws = WaveSurfer.create(opts);
         S.regions = S.ws.registerPlugin(WaveSurfer.Regions.create());
-        S.regions.enableDragSelection({ color: 'rgba(245,158,11,.22)' });
+        S.regions.enableDragSelection({ color: REGION_COLOR });
         S.regions.on('region-created', function (r) { S.regions.getRegions().forEach(function (o) { if (o !== r) o.remove(); }); S.region = r; showSel(); });
+        S.regions.on('region-update', function () { showSel(); });     // live while a handle is dragged
         S.regions.on('region-updated', function () { showSel(); });
         S.ws.on('timeupdate', function (t) { $('time').textContent = fmt(t) + ' / ' + fmt(S.ws.getDuration()); regionEnd(t); });
-        S.ws.on('ready', function () { $('time').textContent = '0:00.0 / ' + fmt(S.ws.getDuration()); applyZoom(); applyRate(); });
+        S.ws.on('ready', function () { $('time').textContent = '0:00.0 / ' + fmt(S.ws.getDuration()); applyZoom(); applyRate(); if (!S.region) resetFrame(); });
         S.ws.on('interaction', function () { S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; });
         S.ws.on('play', function () { $('play').textContent = '❚❚'; });
         S.ws.on('pause', function () { if (!S.gapT) $('play').textContent = '▶'; });
@@ -167,7 +170,9 @@
     }
     S.region = null; S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; showSel();
     var hasSound = f.kind === 'audio' || (f.kind === 'video' && f.has_audio);
-    ['splitBtn', 'setA', 'setB', 'clearAB'].forEach(function (k) { $(k).disabled = !hasSound; });
+    ['splitBtn', 'setA', 'setB', 'clearAB', 'trReset'].forEach(function (k) { $(k).disabled = !hasSound; });
+    document.querySelectorAll('[data-nudge], [data-here]').forEach(function (b) { b.disabled = !hasSound; });
+    $('trimCard').querySelector('.exact').open = f.kind === 'video' && !f.has_audio;   // no waveform: type the times
     document.querySelector('[data-do="practice"]').disabled = !hasSound;
     // tools that don't fit this file are greyed out
     document.querySelectorAll('[data-audio]').forEach(function (el) { el.disabled = f.kind !== 'audio'; el.classList.toggle('disabled-card', el.tagName !== 'BUTTON' && f.kind !== 'audio'); });
@@ -179,17 +184,56 @@
     fxButton.textContent = f.kind === 'video' ? 'Polish video sound → new MP4' : 'Apply effects → new copy';
     $('fxPreview').disabled = !hasSound;
   }
-  function showSel() {
-    var r = S.region;
-    if (r) { $('selInfo').textContent = 'Selected ' + fmt(r.start) + ' – ' + fmt(r.end) + ' (' + (r.end - r.start).toFixed(1) + ' s) · Play ' + ($('prLoop').checked ? 'repeats' : 'plays') + ' the selection'; $('selS').value = r.start.toFixed(2); $('selE').value = r.end.toFixed(2); }
-    else { $('selInfo').textContent = 'Drag on the waveform to select a part'; $('selS').value = ''; $('selE').value = ''; }
+  // The whole file is always framed by two draggable handles. A frame that still covers the whole
+  // file counts as "nothing selected", so Play plays everything and Trim asks you to drag first.
+  function isFull() {
+    var r = S.region, d = S.ws ? S.ws.getDuration() : 0;
+    return !r || !d || (r.start <= 0.05 && r.end >= d - 0.05);
   }
+  function selected() { return S.region && !isFull() ? S.region : null; }
+  function resetFrame() {
+    if (!S.ws || !S.ws.getDuration()) return;
+    S.abPlay = false; clearTimeout(S.gapT); S.gapT = null;
+    setRegion(0, S.ws.getDuration());
+  }
+  function showSel() {
+    var r = S.region, sel = selected(), d = S.ws ? S.ws.getDuration() : 0;
+    var full = !sel;
+    $('wave').classList.toggle('full', full);
+    $('trimCard').classList.toggle('is-full', full);
+    if (sel) {
+      $('selInfo').innerHTML = 'Selected <b>' + fmt(sel.start) + ' – ' + fmt(sel.end) + '</b> · ' + (sel.end - sel.start).toFixed(1) + ' s · Play ' + ($('prLoop').checked ? 'repeats' : 'plays') + ' it';
+    } else {
+      $('selInfo').textContent = S.ws ? 'Drag the amber handles to trim, or drag across the waveform to pick a part' : '';
+    }
+    $('trS').textContent = r ? fmt(r.start) : '–';
+    $('trE').textContent = r ? fmt(r.end) : '–';
+    $('trL').textContent = r ? fmt(r.end - r.start) : '–';
+    $('trCut').textContent = !r ? '' : (full ? 'the whole file' : 'cuts ' + fmt(r.start + (d - r.end)));
+    $('selS').value = r ? r.start.toFixed(2) : ''; $('selE').value = r ? r.end.toFixed(2) : '';
+  }
+  function moveEdge(which, t) {
+    var r = S.region, d = S.ws ? S.ws.getDuration() : 0; if (!r || !d) return;
+    var s = r.start, e = r.end;
+    if (which === 'start') s = Math.max(0, Math.min(t, e - 0.1)); else e = Math.min(d, Math.max(t, s + 0.1));
+    setRegion(s, e);
+  }
+  document.querySelectorAll('[data-nudge]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var w = b.getAttribute('data-nudge'); if (!S.region) return;
+      moveEdge(w, S.region[w] + Number(b.getAttribute('data-by')));
+    });
+  });
+  document.querySelectorAll('[data-here]').forEach(function (b) {
+    b.addEventListener('click', function () { if (S.ws) moveEdge(b.getAttribute('data-here'), S.ws.getCurrentTime()); });
+  });
+  $('trReset').addEventListener('click', resetFrame);
   function setSelFromInputs() {
     if (!S.regions) return;
     var s = parseFloat($('selS').value), e = parseFloat($('selE').value);
     if (!(e > s)) return;
     S.regions.clearRegions();
-    S.region = S.regions.addRegion({ start: s, end: e, color: 'rgba(245,158,11,.22)' });
+    S.region = S.regions.addRegion({ start: s, end: e, color: REGION_COLOR });
     showSel();
   }
   $('selS').addEventListener('change', setSelFromInputs); $('selE').addEventListener('change', setSelFromInputs);
@@ -197,9 +241,10 @@
     if (!S.ws) { var v = $('vid'); if (!v.hidden) (v.paused ? v.play() : v.pause()); return; }
     var waiting = !!S.gapT; clearTimeout(S.gapT); S.gapT = null;
     if (S.ws.isPlaying() || waiting) { S.ws.pause(); S.abPlay = false; $('play').textContent = '▶'; return; }
-    if (S.region) {
+    var sel = selected();
+    if (sel) {
       var t = S.ws.getCurrentTime();
-      if (t < S.region.start || t >= S.region.end - 0.05) S.ws.setTime(S.region.start);
+      if (t < sel.start || t >= sel.end - 0.05) S.ws.setTime(sel.start);
       S.abPlay = true;
     } else S.abPlay = false;
     S.ws.play();
@@ -229,7 +274,7 @@
   function setRegion(s, e) {
     if (!S.regions) return;
     S.regions.clearRegions();
-    S.region = S.regions.addRegion({ start: s, end: e, color: 'rgba(245,158,11,.22)' });
+    S.region = S.regions.addRegion({ start: s, end: e, color: REGION_COLOR });
     showSel();
   }
   $('setA').addEventListener('click', function () {
@@ -241,7 +286,7 @@
     if (S.region && t > S.region.start + 0.2) setRegion(S.region.start, t);
     else if (t > 0.2) setRegion(Math.max(0, t - 8), t);
   });
-  $('clearAB').addEventListener('click', function () { if (S.regions) S.regions.clearRegions(); S.region = null; S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; showSel(); });
+  $('clearAB').addEventListener('click', resetFrame);
   $('prLoop').addEventListener('change', showSel);
 
   // ── split a song (runs in the background; the page shows progress) ──
@@ -268,7 +313,10 @@
     }).catch(function (x) { toast(x.message, true); }).finally(function () { busy(false); });
   });
   document.addEventListener('keydown', function (e) {
-    if (e.code === 'Space' && !e.target.closest('input, textarea, select, button')) { e.preventDefault(); $('play').click(); }
+    if (e.target.closest('input, textarea, select, [contenteditable]') || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.code === 'Space' && !e.target.closest('button')) { e.preventDefault(); $('play').click(); }
+    else if (e.key === '[' && S.ws) { e.preventDefault(); moveEdge('start', S.ws.getCurrentTime()); }
+    else if (e.key === ']' && S.ws) { e.preventDefault(); moveEdge('end', S.ws.getCurrentTime()); }
   });
   function applyZoom() { if (S.ws) try { S.ws.zoom(Number($('zoom').value)); } catch (e) {} }
   $('zoom').addEventListener('input', applyZoom);
@@ -547,7 +595,8 @@
     }
     if (a === 'trim' || a === 'cut') {
       var s = parseFloat($('selS').value), en = parseFloat($('selE').value);
-      if (!(en > s)) { toast('Drag on the waveform (or type From/To) to select a part first.', true); return; }
+      if (S.ws && !selected()) { toast('Drag the amber handles inwards (or drag across the waveform) to choose a part first.', true); return; }
+      if (!(en > s)) { toast('Type the From and To times first.', true); return; }
       body.start = s; body.end = en;
     }
     if (a === 'fade') { body.fade_in = $('fadeIn').value; body.fade_out = $('fadeOut').value; }
@@ -557,7 +606,7 @@
     if (a === 'export') { body.format = $('fmt').value; body.quality = $('qual').value; }
     if (a === 'effects' || a === 'effects_video') { body.fx = fxValues(); stopFxPreview(); }
     if (a === 'best') body.length = $('bestLen').value;
-    if (a === 'practice') { body.rate = S.rate; if (S.region) { body.start = S.region.start; body.end = S.region.end; } }
+    if (a === 'practice') { body.rate = S.rate; var ps = selected(); if (ps) { body.start = ps.start; body.end = ps.end; } }
     if (a === 'video_music') {
       body.music = $('vmMusic').value; body.music_from = $('vmFrom').value; body.music_db = $('vmDb').value; body.keep_original = $('vmKeep').checked;
       body.duck = $('vmDuck').checked; body.original_db = $('vmOrig').value; body.fade_out = $('vmFade').value;

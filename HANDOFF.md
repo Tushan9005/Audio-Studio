@@ -124,3 +124,17 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 8. Chord display while a song plays (estimate)
 9. Live pitch meter for singing practice
 10. Cover-video helper: sync a phone video of him playing with the studio recording → Reel
+
+## UI refresh + drag trimmer (21 Nov 2026)
+- Look: "home studio at night". Warm walnut surfaces with one amber accent; tokens are on `:root` in
+  static/app.css (`--room/--desk/--rack/--inset`, `--wire*` hairlines, `--ink..--ink-4`, `--glow*`). Fonts are
+  Segoe UI Variable (Windows 11) with Cascadia Mono/Consolas for time counters. No web fonts, so it stays offline.
+  Depth = tonal surfaces + hairline borders (no drop shadows on cards).
+- Trimmer: every file with sound gets a full-length region on `ready` (`resetFrame()`). Its two handles are the
+  trim adjusters. They are styled through wavesurfer's shadow-DOM parts (`#wave ::part(region-handle-left)` etc.),
+  and the region dims everything outside it with a huge box-shadow. The region body has `pointer-events:none`,
+  so click-to-seek and drag-to-select still work on top of it. A frame that still covers the whole file means
+  "nothing selected" (`isFull()` / `selected()`): Play plays everything, and Trim asks you to drag first.
+  Counters update live on `region-update`. Nudge ±0.1 s, "At playhead", and keys `[` / `]` set start/end.
+  The old From/To inputs are kept under "Type exact times" (opened automatically for videos without sound).
+- `fmt()` now rounds before formatting (9.96 s used to show as "0:010.0").
