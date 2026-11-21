@@ -1,7 +1,7 @@
 # Audio Studio
 
 A private music, voice and video-sound workshop that runs only on this PC (http://127.0.0.1:8765).
-Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice (offline), wavesurfer.js.
+Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice (offline), Demucs (song splitting), wavesurfer.js.
 
 **Start:** double-click `Start Audio Studio.bat`. Close the black window to stop.
 
@@ -11,6 +11,14 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   Every tool makes a new copy; originals are never changed. Files live in `workspace/`.
 - **Edit:** select on the waveform → keep / remove the part; fades; volume; loop; join ticked files
   with crossfade; save as MP3 / M4A / OGG / FLAC / WAV / MP4; take the sound out of a video.
+- **Tuner** (button at the top right): guitar tuner using the mic, all in the browser. Standard, Drop D,
+  E♭, D, DADGAD and Open G tunings; A = 440 can be changed.
+- **Practice:** slow a song down to 50–75% (the pitch stays the same) live while playing along; A–B loop
+  (drag on the waveform or "Set A / Set B here") with an optional pause before each repeat;
+  "Save a practice copy" makes a slowed file (only the A–B part, if selected) for the phone.
+  **Split song:** vocals only, guitar only, karaoke (no vocals), backing without guitar, drums, bass
+  (Demucs htdemucs_6s on the CPU, roughly half the song's length; model cached in
+  `%USERPROFILE%\.cache\huggingface`, loaded offline after the first download).
 - **Effects:** noise reduction, 50 Hz hum removal, low cut, de-esser, 4-band EQ, compression,
   convolution reverb with room size, echo, stereo width, pitch shift (keeps speed), speed (keeps pitch),
   lo-fi, old radio, pause removal, loudness for Instagram/YouTube (-14 LUFS). Presets: vocal polish,

@@ -4,7 +4,7 @@ with num()/pick()), runs ffmpeg or Python, registers the result in the library a
 Audio results are saved as WAV (lossless) while you work; "Export" makes MP3 / M4A / OGG / FLAC.
 Video results are MP4 (H.264 + AAC), which Instagram, Facebook, WhatsApp and YouTube all accept.
 """
-import math, os, secrets
+import math, os, secrets, threading
 
 import numpy as np
 import soundfile as sf
@@ -370,7 +370,9 @@ def music_under_video(vid, mid, p):
     if fo > 0:
         music += ",afade=t=out:st=%.3f:d=%.3f" % (max(0, D - fo), fo)
     if keep:
-        g = "[0:a]aformat=channel_layouts=stereo,volume=%.2fdB,asplit[o][sc];%s[m];" % (ovol, music)
+        # the same exact format on both sides (ffmpeg 4.2's sidechaincompress can't pick one itself)
+        fmt = "aformat=sample_fmts=dbl:sample_rates=%d:channel_layouts=stereo" % SR
+        g = "[0:a]aresample=%d,%s,volume=%.2fdB,asplit[o][sc];%s,%s[m];" % (SR, fmt, ovol, music, fmt)
         if duck:   # music dips whenever the video's own sound (a voice) is loud
             g += "[m][sc]sidechaincompress=threshold=0.04:ratio=10:attack=15:release=450[md];[o][md]amix=inputs=2:duration=first,volume=2[out]"
         else:
@@ -487,14 +489,135 @@ def voiceover(text, voice, speed, music_id=None, music_db=-14, music_from=0):
         L = vd + 2.5
         off = num(music_from, 0, max(0, m["duration"] - 1), 0)
         mdb = num(music_db, -30, 0, -14)
-        g = ("[0:a]aresample=%d,aformat=channel_layouts=stereo,adelay=800|800,apad,atrim=end=%.3f,asplit[v][sc];"
+        # ffmpeg 4.2's sidechaincompress needs the exact same format spelled out on both of its inputs
+        fmt = "aformat=sample_fmts=dbl:sample_rates=%d:channel_layouts=stereo" % SR
+        g = ("[0:a]aresample=%d,%s,adelay=800|800,apad,atrim=end=%.3f,asplit[v][sc];"
              "[1:a]atrim=start=%.3f,asetpts=PTS-STARTPTS,aformat=channel_layouts=stereo,volume=%.1fdB,apad,atrim=end=%.3f,"
-             "afade=t=in:st=0:d=0.5,afade=t=out:st=%.3f:d=1.8[m];"
+             "afade=t=in:st=0:d=0.5,afade=t=out:st=%.3f:d=1.8,%s[m];"
              "[m][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[md];"
-             "[v][md]amix=inputs=2:duration=first,volume=2,loudnorm=I=-14:TP=-1.5[out]") % (SR, L, off, mdb, L, L - 1.8)
+             "[v][md]amix=inputs=2:duration=first,volume=2,loudnorm=I=-14:TP=-1.5[out]") % (SR, fmt, L, off, mdb, L, L - 1.8, fmt)
         fid, out = new_path("wav")
         run(["-i", raw, "-i", path_of(m), "-filter_complex", g, "-map", "[out]"] + WAV + [out])
         return register(fid, "wav", ("Voice + music: " + text[:30]), "voice", m["id"])
     finally:
         try: os.remove(raw)
+        except OSError: pass
+
+
+# ═════════════ PRACTICE ═════════════
+def practice_copy(fid, rate, start=None, end=None):
+    """A slowed (or sped-up) copy that keeps the pitch, optionally only the A–B part, to take to the phone."""
+    it = need(get(fid), "audio", "video")
+    if not it["has_audio"]:
+        raise MediaError("This video has no sound.")
+    r = num(rate, 0.5, 1.5, 1.0)
+    d = it["duration"] or 1e9
+    f = []
+    s, e = num(start, 0, d, 0), num(end, 0, d, 0)
+    if e - s >= 0.5:
+        f += ["atrim=start=%.3f:end=%.3f" % (s, e), "asetpts=PTS-STARTPTS"]
+    if abs(r - 1) > 0.005:
+        f.append(_tempo_chain(r))
+    if not f:
+        raise MediaError("Choose a slower speed or select a part first.")
+    f.append("alimiter=limit=0.97")
+    label = "practice %d%%" % round(r * 100) + (" (%s-%s)" % (_mmss(s), _mmss(e)) if e - s >= 0.5 else "")
+    return _audio_out(it, f, label, op="practice")
+
+
+def _mmss(t):
+    return "%d:%02d" % (t // 60, t % 60)
+
+
+# ═════════════ SPLIT (stems with Demucs) ═════════════
+# htdemucs_6s separates drums, bass, other, vocals, guitar and piano. It runs on the CPU (about half
+# the song's length on this PC). The model (~55 MB) is kept in the HuggingFace cache in the user folder
+# after the first download; from then on it loads offline.
+STEMS = {
+    "vocals": ("Vocals only", ["vocals"]),
+    "guitar": ("Guitar only", ["guitar"]),
+    "karaoke": ("Karaoke (no vocals)", ["drums", "bass", "other", "guitar", "piano"]),
+    "no_guitar": ("Backing without guitar", ["drums", "bass", "other", "vocals", "piano"]),
+    "drums": ("Drums only", ["drums"]),
+    "bass": ("Bass only", ["bass"]),
+}
+_DEMUCS = None
+_split_lock = threading.Lock()
+
+
+def _demucs():
+    global _DEMUCS
+    if _DEMUCS is None:
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+        cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub", "models--adefossez--HTDemucs-6s")
+        if os.path.isdir(cache):
+            os.environ["HF_HUB_OFFLINE"] = "1"   # already downloaded: never go online again
+        try:
+            from demucs.pretrained import get_model
+        except ImportError:
+            raise MediaError("The song splitter isn't installed. Run: .venv/Scripts/python.exe -m pip install demucs")
+        try:
+            _DEMUCS = get_model("htdemucs_6s")
+        except Exception as e:
+            raise MediaError("Could not load the song splitter model (%s). The first use needs internet once to download it." % str(e)[:200])
+    return _DEMUCS
+
+
+def split(fid, wanted, progress=lambda p: None):
+    """Separates a song and adds the chosen mixes (see STEMS) to the library."""
+    import torch
+    from demucs.apply import apply_model
+    it = need(get(fid), "audio", "video")
+    if not it["has_audio"]:
+        raise MediaError("This video has no sound.")
+    wanted = [w for w in STEMS if w in (wanted or [])]
+    if not wanted:
+        raise MediaError("Tick at least one thing to make.")
+    if it["duration"] > 20 * 60:
+        raise MediaError("Songs up to 20 minutes can be split. Trim it first.")
+    if not _split_lock.acquire(blocking=False):
+        raise MediaError("Another song is being split. Wait for it to finish.")
+    tmp = os.path.join(TMP, "split-%s.wav" % secrets.token_hex(4))
+    try:
+        progress(0.01)
+        model = _demucs()
+        run(["-i", path_of(it), "-vn", "-ar", str(model.samplerate), "-ac", "2", "-c:a", "pcm_f32le", tmp])
+        y, sr = sf.read(tmp, dtype="float32", always_2d=True)
+        wav = torch.from_numpy(y.T.copy())
+        ref = wav.mean(0)
+        mean, std = ref.mean(), ref.std() + 1e-8
+        x = ((wav - mean) / std)[None]
+        seg = float(getattr(model, "segment", 7.8) or 7.8)
+        n_models = len(getattr(model, "models", [model]))
+        total = max(1, n_models * math.ceil(x.shape[-1] / max(1, int(0.75 * seg * sr))))
+        done = [0]
+
+        def cb(d):
+            if d.get("state") == "end":
+                done[0] += 1
+                progress(0.02 + 0.93 * min(1.0, done[0] / total))
+
+        with torch.no_grad():
+            out = apply_model(model, x, shifts=1, split=True, overlap=0.25, callback=cb)[0]
+        out = out * std + mean
+        src = {name: out[k] for k, name in enumerate(model.sources)}
+        results = []
+        for w in wanted:
+            label, parts = STEMS[w]
+            mix = sum(src[p] for p in parts if p in src).numpy().T
+            peak = float(np.max(np.abs(mix))) if mix.size else 0
+            if peak > 0.99:
+                mix = mix * (0.99 / peak)
+            nid, path = new_path("wav")
+            sf.write(path, mix, sr, subtype="PCM_16")
+            if sr != SR:
+                fixed = path + ".tmp.wav"
+                run(["-i", path] + WAV + [fixed]); os.replace(fixed, path)
+            results.append(register(nid, "wav", _name(it, label), "split", it["id"]))
+        progress(1.0)
+        return results
+    finally:
+        _split_lock.release()
+        try: os.remove(tmp)
         except OSError: pass

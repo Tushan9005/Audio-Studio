@@ -10,13 +10,13 @@
 ## Where things are
 | Path | What |
 |---|---|
-| `C:\Users\asus\audio-studio\` | The project (its own git repo, local only, 2 commits so far) |
+| `C:\Users\asus\audio-studio\` | The project (its own git repo, local only) |
 | `app\server.py` | FastAPI web API. Listens on 127.0.0.1:8765 only; a middleware refuses other Host/Origin headers |
 | `app\ops.py` | All the tools: edit, effects, analyse, best part, video, beat reel, voice |
 | `app\media.py` | Library (`workspace\index.json`) and a safe ffmpeg runner (argument lists, never a shell) |
 | `static\index.html`, `app.js`, `app.css` | The single-page UI (dark theme). No build step |
 | `static\vendor\` | wavesurfer.js 7.8.6 + regions plugin, downloaded so it works offline |
-| `.venv\` | Python 3.12 virtual env (fastapi, uvicorn, python-multipart, imageio-ffmpeg 0.5.1, numpy, soundfile, librosa, kokoro-onnx). See `requirements.txt` |
+| `.venv\` | Python 3.12 virtual env (fastapi, uvicorn, python-multipart, imageio-ffmpeg 0.5.1, numpy, soundfile, librosa, kokoro-onnx, demucs 4.1.0 + torch CPU). See `requirements.txt` |
 | `workspace\` | Created on first run: `files\` (every file, named `<id>.<ext>`), `tmp\`, `index.json`. Git-ignored |
 | `Start Audio Studio.bat` | Starts the server and opens http://127.0.0.1:8765 |
 | `C:\Users\asus\npf-voice\` | NOT created by this project: the existing Kokoro voice model (`kokoro-v1.0.int8.onnx`, `voices-v1.0.bin`), read from here (env `STUDIO_KOKORO_DIR` overrides) |
@@ -44,12 +44,34 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   - **Beat reel:** builds a steady beat grid from the median beat interval + first beat phase, so quiet intros still get cuts. Each shot is rendered to 1080-wide 9:16 / 4:5 / 1:1 / 16:9 (scale+crop, 30 fps, libx264); photos get a slow `zoompan` from a single frame. Shots are joined with the concat demuxer, then the music is added with a fade.
 - **Voice:** Kokoro-onnx, 8 English voices (`VOICES`); optional music bed ducked under the voice, loudness -14.
 
+## Added in v2 (21 Nov 2026, all tested)
+- **Tuner** (header button, modal `#tuner` in index.html, bottom of app.js): mic → AnalyserNode (4096) → YIN
+  with parabolic interpolation on the *raw* difference curve (sign matters: `(a-c)/(2(a-2b+c))`), median of
+  the last 7 readings. Synthetic test: under 0.1 cent on steady notes from 73 to 660 Hz. Shows the chromatic
+  note + needle, plus advice for the nearest string of the chosen tuning (6 tunings, A = 415–466).
+- **Practice tab:** `ws.setPlaybackRate(rate, true)` (browser keeps the pitch), 50–125%; A–B is the waveform
+  region. Play now really stops at the region end, or loops with an optional pause (`regionEnd()` in app.js,
+  driven by `timeupdate`). This also fixed v1's "Play plays the selection", which never stopped.
+  "Save a practice copy" = `ops.practice_copy` (atrim + atempo chain).
+- **Split song:** `ops.split` with Demucs `htdemucs_6s` (drums, bass, other, vocals, guitar, piano), CPU,
+  ~0.5× song length (40 s song ≈ 9–25 s, 30 s ≈ 15 s cold). Outputs chosen from `STEMS` (sums of sources).
+  Runs as a background thread: `POST /api/split` → job id, `GET /api/jobs/{id}` → progress (counted from
+  apply_model's callback). One split at a time (`_split_lock`). Model weights are in
+  `%USERPROFILE%\.cache\huggingface\hub\models--adefossez--HTDemucs-6s`; when that folder exists
+  `HF_HUB_OFFLINE=1` is set, so it never goes online again.
+- **Fixed v1 bugs:** voiceover + background music, and music under video with "lower music when someone
+  speaks", both failed on ffmpeg 4.2 ("No channel layout for input 1" in sidechaincompress). Both inputs now
+  get an explicit `aformat=sample_fmts=dbl:sample_rates=44100:channel_layouts=stereo`.
+
 ## Known limits / gotchas
 - The bundled ffmpeg is **4.2.2**: no `rubberband`, no `xfade`; `amix` has no `normalize` option, so it's compensated with `volume=2`.
 - Long jobs run in a threadpool (`run_in_threadpool`). There's no progress bar, just a spinner.
 - Elements use the `hidden` attribute; app.css has `[hidden]{display:none!important}`. Keep it.
 - The microphone has never been tested with the owner's real mic and guitar.
 - Kokoro is English only (Bengali TTS would need another free model).
+- Stem quality was checked only with synthetic music + the Kokoro voice (the voice went to "Vocals", the kick
+  stayed in "Karaoke"). Not yet tried on a real song; the guitar stem of htdemucs_6s is the weakest of the six.
+- The tuner was tested with Chrome's fake mic (a 108.5 Hz tone read as "A, 24 cents low", which is correct), not his guitar yet.
 
 ## How to test changes
 1. Start the server in the background.
@@ -60,12 +82,12 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 6. Delete `workspace\` afterwards so the owner starts clean.
 7. Commit locally only.
 
-## Next: ideas the owner was offered (he hasn't chosen yet; recommended first: 1, 3, 5)
-1. Guitar tuner (Web Audio pitch detection, all in the browser)
+## Next: ideas the owner was offered (1, 3 and 5 are DONE in v2; next recommended: 2, 4, 9)
+1. ~~Guitar tuner~~ (done)
 2. Metronome / click track with count-in for recording
-3. Practice mode: slow down 50–75% keeping pitch, A–B loop
+3. ~~Practice mode~~ (done)
 4. Transpose a song to suit his voice (pitch shift; Analyse gives the key)
-5. Stem separation with Demucs (free, CPU, a few minutes per song): karaoke / no-guitar backing tracks
+5. ~~Stem separation with Demucs~~ (done)
 6. Multitrack: record guitar, then sing over it with playback, then mix
 7. Punch-in re-recording of one line
 8. Chord display while a song plays (estimate)

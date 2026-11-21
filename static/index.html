@@ -10,7 +10,8 @@
 <body>
 <header class="top">
   <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 18v-4M11 22V10M15 25V7M19 20v-8M23 23V9M27 17v-2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg> Audio Studio</div>
-  <div class="top-note">Runs only on this PC · files stay in <code>audio-studio\workspace</code></div>
+  <div class="top-right"><span class="top-note">Runs only on this PC · files stay in <code>audio-studio\workspace</code></span>
+  <button class="btn small" id="tunerBtn" type="button">🎸 Tuner</button></div>
 </header>
 
 <div class="layout">
@@ -51,7 +52,7 @@
         <div id="wave"></div>
         <div class="transport" id="transport">
           <button class="btn round" id="play" type="button" aria-label="Play">▶</button>
-          <span class="time" id="time">0:00.0 / 0:00.0</span>
+          <span class="time" id="time">0:00.0 / 0:00.0</span><span class="rate-tag" id="rateTag" hidden></span>
           <span class="sel" id="selInfo">Drag on the waveform to select a part</span>
           <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="300" value="0"></label>
         </div>
@@ -59,6 +60,7 @@
 
       <nav class="tabs" role="tablist">
         <button role="tab" data-t="edit" aria-selected="true">Edit</button>
+        <button role="tab" data-t="practice" aria-selected="false">Practice</button>
         <button role="tab" data-t="fx" aria-selected="false">Effects</button>
         <button role="tab" data-t="video" aria-selected="false">Video</button>
         <button role="tab" data-t="voice" aria-selected="false">Voice</button>
@@ -92,6 +94,39 @@
             <select id="qual"><option value="128">128 kbps</option><option value="192" selected>192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select>
             <button class="btn" data-do="export">Save</button></div>
             <button class="btn" data-do="extract" data-video-only>Take the sound out of this video</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PRACTICE -->
+      <div class="panel" data-p="practice" hidden>
+        <div class="grid">
+          <div class="card"><h3>Slow down (the pitch stays the same)</h3>
+            <label class="slide">Speed <input type="range" id="prRate" min="50" max="125" step="5" value="100"><output id="prRateO">100%</output></label>
+            <div class="row chips-row" id="prQuick"><button class="btn small" data-rate="50">50%</button><button class="btn small" data-rate="60">60%</button><button class="btn small" data-rate="75">75%</button><button class="btn small" data-rate="90">90%</button><button class="btn small" data-rate="100">Normal</button></div>
+            <p class="note">Changes the playback live, so you can play along. Nothing is saved until you press "Save a practice copy".</p>
+          </div>
+          <div class="card"><h3>Repeat a part (A–B loop)</h3>
+            <div class="row"><button class="btn" id="setA" type="button">Set A here</button><button class="btn" id="setB" type="button">Set B here</button><button class="btn ghost" id="clearAB" type="button">Clear</button></div>
+            <label class="tick"><input type="checkbox" id="prLoop" checked> Loop the selected part</label>
+            <label>Pause before each repeat <select id="prGap"><option value="0">None</option><option value="1">1 second</option><option value="2" selected>2 seconds</option><option value="4">4 seconds</option></select></label>
+            <p class="note">Or drag on the waveform. Press Play (or Space): the part plays and repeats.</p>
+          </div>
+          <div class="card"><h3>Take it with you</h3>
+            <p class="note">Makes a new file at the speed above (only the A–B part, if one is selected), e.g. to practise from your phone.</p>
+            <button class="btn" data-do="practice">Save a practice copy</button>
+          </div>
+          <div class="card wide" id="splitCard"><h3>Split this song: vocals, guitar, backing</h3>
+            <p class="note">Separates the song into parts on this PC (free, no internet). Takes roughly half the song's length, e.g. about 2 minutes for a 4-minute song. Results are good, not perfect: a little of other instruments can remain.</p>
+            <div class="row stems">
+              <label class="tick"><input type="checkbox" data-stem="vocals" checked> Vocals only</label>
+              <label class="tick"><input type="checkbox" data-stem="guitar" checked> Guitar only</label>
+              <label class="tick"><input type="checkbox" data-stem="karaoke" checked> Karaoke (no vocals)</label>
+              <label class="tick"><input type="checkbox" data-stem="no_guitar" checked> Backing without guitar</label>
+              <label class="tick"><input type="checkbox" data-stem="drums"> Drums only</label>
+              <label class="tick"><input type="checkbox" data-stem="bass"> Bass only</label>
+            </div>
+            <button class="btn primary" id="splitBtn" type="button">Split song</button>
           </div>
         </div>
       </div>
@@ -183,7 +218,27 @@
   </main>
 </div>
 
-<div class="busy" id="busy" hidden><div class="spin"></div><p id="busyMsg">Working…</p></div>
+<div class="busy" id="busy" hidden><div class="spin"></div><p id="busyMsg">Working…</p><div class="bar" id="busyBar" hidden><i></i></div></div>
+
+<div class="modal" id="tuner" role="dialog" aria-modal="true" aria-labelledby="tunerTitle" hidden>
+  <div class="tuner">
+    <div class="tuner-head"><h2 id="tunerTitle">Guitar tuner</h2><button class="btn small ghost" id="tunerClose" type="button" aria-label="Close tuner">✕</button></div>
+    <div class="tn-note"><span id="tnNote">–</span><sub id="tnOct"></sub></div>
+    <div class="tn-meter" aria-hidden="true"><div class="tn-scale"><span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span></div><div class="tn-zone"></div><div class="tn-needle" id="tnNeedle"></div></div>
+    <div class="tn-read" id="tnRead" aria-live="polite">Play one string…</div>
+    <div class="tn-strings" id="tnStrings"></div>
+    <div class="row tn-opts"><label>Tuning <select id="tnTuning">
+      <option value="E2 A2 D3 G3 B3 E4">Standard (E A D G B E)</option>
+      <option value="D2 A2 D3 G3 B3 E4">Drop D (D A D G B E)</option>
+      <option value="D#2 G#2 C#3 F#3 A#3 D#4">Half step down (E♭)</option>
+      <option value="D2 G2 C3 F3 A3 D4">Whole step down (D)</option>
+      <option value="D2 A2 D3 G3 A3 D4">DADGAD</option>
+      <option value="D2 G2 D3 G3 B3 D4">Open G</option>
+    </select></label>
+    <label>A = <input type="number" id="tnRef" value="440" min="415" max="466" step="1"></label></div>
+    <p class="note">Uses your microphone, only in this browser. Pluck one string at a time and let it ring.</p>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="vendor/wavesurfer.min.js"></script>

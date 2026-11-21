@@ -1,5 +1,5 @@
 """Audio Studio: a small local web app (http://127.0.0.1:8765), only reachable from this PC."""
-import os, shutil
+import os, secrets, shutil, threading, time
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -130,6 +130,7 @@ async def do(action: str, request: Request):
         "best": lambda: ops.best_part(f, p.get("length")),
         "video_music": lambda: ops.music_under_video(f, p.get("music"), p),
         "beat_reel": lambda: ops.beat_reel(p.get("clips") or [], p.get("music"), p),
+        "practice": lambda: ops.practice_copy(f, p.get("rate"), p.get("start"), p.get("end")),
         "voice": lambda: ops.voiceover(p.get("text"), p.get("voice"), p.get("speed"), p.get("music") or None, p.get("music_db"), p.get("music_from")),
     }
     if action == "analyse":
@@ -137,6 +138,41 @@ async def do(action: str, request: Request):
     if action not in acts:
         raise MediaError("Unknown tool.")
     return {"file": await run_in_threadpool(acts[action])}   # long jobs don't freeze the app
+
+
+# ── long jobs (song splitting): run in the background, the page asks for progress ──
+JOBS = {}
+
+
+@app.post("/api/split")
+async def split(request: Request):
+    p = await request.json()
+    ops.need(media.get(p.get("id")), "audio", "video")
+    jid = secrets.token_hex(6)
+    job = JOBS[jid] = {"progress": 0.0, "done": False, "error": None, "files": [], "started": time.time()}
+
+    def work():
+        try:
+            job["files"] = ops.split(p.get("id"), p.get("stems") or [], progress=lambda x: job.update(progress=round(x, 3)))
+        except MediaError as e:
+            job["error"] = str(e)
+        except Exception as e:
+            job["error"] = "Something went wrong: %s" % str(e)[:300]
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=work, daemon=True).start()
+    for k in [k for k, j in JOBS.items() if j["done"] and time.time() - j["started"] > 3600]:
+        JOBS.pop(k, None)
+    return {"job": jid}
+
+
+@app.get("/api/jobs/{jid}")
+def job(jid: str):
+    j = JOBS.get(jid)
+    if not j:
+        raise MediaError("That job is gone (was the app restarted?).")
+    return {**j, "elapsed": round(time.time() - j["started"], 1)}
 
 
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
