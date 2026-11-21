@@ -19,10 +19,18 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   **Split song:** vocals only, guitar only, karaoke (no vocals), backing without guitar, drums, bass
   (Demucs htdemucs_6s on the CPU, roughly half the song's length; model cached in
   `%USERPROFILE%\.cache\huggingface`, loaded offline after the first download).
-- **Effects:** noise reduction, 50 Hz hum removal, low cut, de-esser, 4-band EQ, compression,
-  convolution reverb with room size, echo, stereo width, pitch shift (keeps speed), speed (keeps pitch),
+- **Effects:** gentle tracked-noise reduction (no noise gate, so guitar decay is preserved), 50 Hz hum
+  removal, low cut, de-esser, tone/boxiness EQ, compression,
+  natural stereo convolution reverb with pre-delay, brightness and room size, echo, stereo width,
+  pitch shift (keeps speed), speed (keeps pitch),
   lo-fi, old radio, pause removal, loudness for Instagram/YouTube (-14 LUFS). Presets: vocal polish,
-  warm acoustic guitar, phone-recording clean-up, lo-fi, radio, bass boost, big hall.
+  warm acoustic guitar, phone-recording clean-up, lo-fi, radio, bass boost, big hall, plus one-click
+  Natural / Intimate / Spacious processing for a phone-recorded singing-and-acoustic-guitar cover.
+  **Live preview** routes playback through matching browser EQ, compression, echo, stereo-width and
+  convolution-reverb controls, updating while the song plays without creating files. Denoising, de-essing,
+  pitch shifting and final loudness are applied only by the final high-quality render.
+  The cover processing works directly on phone video too: the picture is copied unchanged and the
+  polished soundtrack is placed back into a new MP4.
 - **Video:** music under a video (keeps or ducks the video's own voice), beat reel (cuts ticked
   clips/photos on the beat into 9:16 / 4:5 / 1:1 / 16:9), best 15/30/60 s of a song.
 - **Voice:** English voiceover with the free Kokoro voice (model files read from `C:\Users\asus\npf-voice`,

@@ -9,7 +9,7 @@ import math, os, secrets, threading
 import numpy as np
 import soundfile as sf
 
-from .media import FILES, TMP, MediaError, get, new_path, path_of, register, run
+from .media import FILES, TMP, MediaError, delete, get, new_path, path_of, register, run
 
 SR = 44100
 WAV = ["-ar", str(SR), "-ac", "2", "-c:a", "pcm_s16le"]
@@ -73,6 +73,31 @@ def _audio_out(item, filters, suffix, extra_inputs=(), complex_graph=None, op=""
 
 
 # ═════════════ EDIT ═════════════
+def vocal_layers(fid, layers):
+    lead = need(get(fid), "audio")
+    if not isinstance(layers, list) or not 1 <= len(layers) <= 8:
+        raise MediaError("Choose one to eight audible layers.")
+    args, graph, outputs = [], [], []
+    for i, layer in enumerate(layers):
+        if not isinstance(layer, dict):
+            raise MediaError("Invalid layer.")
+        source = need(get(layer.get("source") or fid), "audio")
+        args += ["-i", path_of(source)]
+        ratio = 2 ** (num(layer.get("shift"), -12, 12, 0) / 12)
+        gain = _lin(num(layer.get("db"), -36, 6, -6))
+        pan = num(layer.get("pan"), -1, 1, 0)
+        delay = int(num(layer.get("delay"), 0, 5000, 0))
+        chain = "aresample=44100,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS"
+        if ratio != 1:
+            chain += ",asetrate=%.6f,aresample=44100,%s" % (SR * ratio, _tempo_chain(1 / ratio))
+        chain += ",volume=%.8f,pan=stereo|c0=%.8f*c0|c1=%.8f*c0,adelay=%d|%d" % (gain, math.cos((pan+1)*math.pi/4), math.sin((pan+1)*math.pi/4), delay, delay)
+        graph.append("[%d:a]%s[v%d]" % (i, chain, i))
+        outputs.append("[v%d]" % i)
+    graph.append("%samix=inputs=%d:duration=longest:dropout_transition=0,volume=%d,alimiter=limit=0.95:level=false[out]" % ("".join(outputs), len(layers), len(layers)))
+    nid, out = new_path("wav")
+    run(args + ["-filter_complex", ";".join(graph), "-map", "[out]"] + WAV + [out])
+    return register(nid, "wav", _name(lead, "vocal layers"), "vocal_layers", fid)
+
 def trim(fid, start, end):
     it = need(get(fid), "audio", "video")
     d = it["duration"] or 1e9
@@ -175,9 +200,18 @@ def extract_audio(fid):
 
 # ═════════════ EFFECTS ═════════════
 PRESETS = {
+    "cover_natural": {"label": "★ Instagram acoustic cover — natural", "highpass": 65, "deess": 1, "mud": -2.5,
+                      "presence": 2, "treble": 1.5, "comp": 2, "reverb": 14, "room": 1.45,
+                      "predelay": 22, "reverb_tone": 58, "width": 0.5, "loud": "-14"},
+    "cover_intimate": {"label": "Instagram acoustic cover — intimate", "highpass": 70, "deess": 1, "mud": -2,
+                       "presence": 2.5, "treble": 1, "comp": 2, "reverb": 9, "room": 0.9,
+                       "predelay": 18, "reverb_tone": 65, "width": 0.5, "loud": "-14"},
+    "cover_spacious": {"label": "Instagram acoustic cover — spacious", "highpass": 60, "deess": 1, "mud": -2,
+                       "presence": 2, "treble": 1, "comp": 2, "reverb": 23, "room": 2.2,
+                       "predelay": 35, "reverb_tone": 50, "width": 1, "loud": "-14"},
     "vocal": {"label": "Vocal polish", "highpass": 80, "deess": 1, "comp": 3, "presence": 3, "reverb": 15, "room": 1.2, "loud": "-14"},
-    "guitar": {"label": "Warm acoustic guitar", "highpass": 60, "bass": 2, "treble": 1, "comp": 2, "reverb": 18, "room": 1.6, "loud": "-14"},
-    "cleanup": {"label": "Clean up a phone recording", "noise": 18, "hum": 1, "highpass": 90, "comp": 2, "loud": "-16"},
+    "guitar": {"label": "Warm acoustic guitar", "highpass": 50, "bass": 2, "mud": -1.5, "treble": 1, "comp": 2, "reverb": 16, "room": 1.5, "predelay": 16, "reverb_tone": 55, "loud": "-14"},
+    "cleanup": {"label": "Clean up a phone recording", "noise": 10, "highpass": 70, "mud": -2, "comp": 1, "reverb": 8, "room": 0.9, "predelay": 15, "reverb_tone": 60, "loud": "-16"},
     "lofi": {"label": "Lo-fi", "lofi": 1, "reverb": 10, "room": 1.0},
     "radio": {"label": "Old radio", "radio": 1},
     "bass": {"label": "Bass boost", "bass": 6, "loud": "-14"},
@@ -185,20 +219,37 @@ PRESETS = {
 }
 
 
-def _impulse(seconds, path):
-    """A simple stereo room echo (decaying noise with a few early reflections) for convolution reverb."""
-    n = int(SR * seconds)
+def _impulse(seconds, path, predelay_ms=20, brightness=55):
+    """Make a smooth stereo room/plate impulse.
+
+    A short pre-delay keeps words and guitar attacks clear.  The diffuse tail is band-limited so it
+    sounds like a room instead of white-noise hiss, and the two channels are decorrelated for width.
+    """
+    from scipy.signal import butter, sosfilt
+
+    pre = int(SR * predelay_ms / 1000)
+    n = pre + int(SR * seconds)
     rng = np.random.default_rng(7)
-    t = np.arange(n) / SR
+    tail_n = n - pre
+    t = np.arange(tail_n) / SR
     env = np.exp(-6.9 * t / seconds)   # -60 dB at the end
-    ir = rng.standard_normal((n, 2)) * env[:, None]
-    for ms, g in ((11, .5), (19, .35), (29, .3), (41, .22)):
-        k = int(SR * ms / 1000)
+    fade = np.minimum(1.0, t / 0.018)  # the room builds rather than bursting in
+    cutoff = 2800 + (brightness / 100.0) * 8200
+    sos = butter(2, [110, min(cutoff, SR * 0.46)], btype="bandpass", fs=SR, output="sos")
+    noise = sosfilt(sos, rng.standard_normal((tail_n, 2)), axis=0)
+    # A little cross-feed makes the tail cohesive while keeping the stereo channels different.
+    noise = np.column_stack((noise[:, 0] + noise[:, 1] * .16, noise[:, 1] + noise[:, 0] * .12))
+    ir = np.zeros((n, 2), dtype=np.float64)
+    ir[pre:] = noise * env[:, None] * fade[:, None] * .16
+    for ms, gl, gr in ((0, .72, .68), (13, .38, .20), (23, .18, .34), (37, .25, .15), (53, .12, .22), (79, .12, .08)):
+        k = pre + int(SR * ms / 1000)
         if k < n:
-            ir[k, 0] += g; ir[min(n - 1, k + 37), 1] += g
+            ir[k, 0] += gl; ir[min(n - 1, k + 31), 1] += gr
     ir[0] = 0
-    ir /= np.max(np.abs(ir)) + 1e-9
-    sf.write(path, (ir * 0.5).astype(np.float32), SR)
+    # Unit energy per channel: the reverb comes out about as loud as the dry sound, so "Reverb 14%"
+    # really is a 14% wet mix (afir runs with gtype=none, i.e. without its own volume normalisation).
+    ir /= np.sqrt((ir ** 2).sum(axis=0).mean()) + 1e-9
+    sf.write(path, ir.astype(np.float32), SR)
 
 
 def effects(fid, p):
@@ -207,7 +258,9 @@ def effects(fid, p):
     it = need(get(fid), "audio")
     f, extra, label = [], [], []
     if num(p.get("noise"), 0, 40, 0) > 0:
-        f.append("afftdn=nr=%.1f:nf=-30" % num(p["noise"], 1, 40, 12)); label.append("noise cleaned")
+        # Track a low steady noise floor instead of gating quiet passages. A conservative -50 dB
+        # starting floor helps preserve guitar sustain and breaths between sung phrases.
+        f.append("afftdn=nr=%.1f:nf=-50:tn=1:tr=1" % num(p["noise"], 1, 40, 10)); label.append("steady hiss reduced")
     if p.get("hum"):
         f += ["bandreject=f=50:width_type=q:w=8", "bandreject=f=100:width_type=q:w=8", "bandreject=f=150:width_type=q:w=8"]; label.append("hum removed")
     hp = num(p.get("highpass"), 0, 300, 0)
@@ -221,6 +274,9 @@ def effects(fid, p):
     m = num(p.get("mid"), -12, 12, 0)
     if m:
         f.append("equalizer=f=1000:width_type=o:w=1.2:g=%.1f" % m)
+    mud = num(p.get("mud"), -8, 6, 0)
+    if mud:
+        f.append("equalizer=f=280:width_type=o:w=1.1:g=%.1f" % mud); label.append("boxiness %+.1f" % mud)
     pr = num(p.get("presence"), -12, 12, 0)
     if pr:
         f.append("equalizer=f=3200:width_type=o:w=1:g=%.1f" % pr)
@@ -254,14 +310,17 @@ def effects(fid, p):
     graph = None
     if rv > 0:
         room = num(p.get("room"), 0.3, 6, 1.5)
-        ir = os.path.join(TMP, "ir-%.2f.wav" % room)
+        predelay = int(num(p.get("predelay"), 0, 100, 20))
+        tone = int(num(p.get("reverb_tone"), 0, 100, 55))
+        ir = os.path.join(TMP, "ir-v3-%.2f-%d-%d.wav" % (room, predelay, tone))
         if not os.path.isfile(ir):
-            _impulse(room, ir)
+            _impulse(room, ir, predelay, tone)
         extra.append(ir)
         pre = (",".join(f) if f else "anull")
         mix = rv / 100.0
-        graph = ("[0:a]%s,aformat=channel_layouts=stereo,asplit[dry][w];[w][1:a]afir[wet];"
-                 "[dry]volume=%.3f[d];[wet]volume=%.3f[r];[d][r]amix=inputs=2:duration=first,volume=2") % (pre, 1 - mix * 0.6, mix)
+        graph = ("[0:a]%s,aformat=channel_layouts=stereo,asplit[clean][w];"
+                 "[clean]apad=pad_dur=%.3f[dry];[w]apad=pad_dur=%.3f[wp];[wp][1:a]afir=gtype=none[wet];"   # afir's dry= is its INPUT gain: dry=0 silences the reverb
+                 "[dry]volume=%.3f[d];[wet]volume=%.3f[r];[d][r]amix=inputs=2:duration=first,volume=2") % (pre, room, room, 1 - mix * 0.6, mix)
         label.append("reverb %d%%" % rv)
     loud = pick(str(p.get("loud", "")), ("-14", "-16", "-23"), "")
     tail = []
@@ -275,6 +334,26 @@ def effects(fid, p):
     if not f and not loud:
         raise MediaError("Turn on at least one effect.")
     return _audio_out(it, f + tail, ", ".join(label) or "effects", op="effects")
+
+
+def effects_video(fid, p):
+    """Polish a phone video's soundtrack and put it back under the untouched picture."""
+    vid = need(get(fid), "video")
+    if not vid["has_audio"]:
+        raise MediaError("This video has no sound to polish.")
+    extracted = processed = None
+    try:
+        extracted = extract_audio(fid)
+        processed = effects(extracted["id"], p)
+        nid, out = new_path("mp4")
+        run(["-i", path_of(vid), "-i", path_of(processed), "-map", "0:v:0", "-map", "1:a:0",
+             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
+        return register(nid, "mp4", _name(vid, "polished cover"), "effects_video", vid["id"])
+    finally:
+        if processed:
+            delete(processed["id"])
+        if extracted:
+            delete(extracted["id"])
 
 
 # ═════════════ ANALYSE ═════════════
@@ -302,6 +381,55 @@ def beats(item):
     y, sr = _load_mono(item)
     tempo, bt = librosa.beat.beat_track(y=y, sr=sr)
     return float(np.atleast_1d(tempo)[0]), librosa.frames_to_time(bt, sr=sr), y, sr
+
+
+def sound_check(fid):
+    """Heuristic recording checks, not a musical correctness score."""
+    import tempfile
+    it = need(get(fid), "audio", "video")
+    with tempfile.TemporaryDirectory(prefix="sound-check-", dir=TMP) as folder:
+        decoded = os.path.join(folder, "audio.wav")
+        run(["-i", path_of(it), "-t", "120", "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_f32le", decoded])
+        y, sr = sf.read(decoded, dtype="float32", always_2d=True)
+    if not len(y):
+        raise MediaError("No audio samples to analyse.")
+    peak = float(np.max(np.abs(y)))
+    rms = float(np.sqrt(np.mean(y.astype(np.float64) ** 2)))
+    db = lambda x: round(20 * math.log10(max(x, 1e-9)), 1)
+    near = float(np.mean(np.abs(y) >= .999) * 100)
+    tips = []
+    if peak < .0001:
+        tips.append("This excerpt is effectively silent. Check the microphone, source track and mute settings.")
+    else:
+        if near > .01:
+            tips.append("Samples reach full scale. Listen for distortion; lower recording gain and re-record if distorted. Lowering volume later cannot repair clipping.")
+        elif peak > .89:
+            tips.append("Little peak headroom remains. Leave roughly 1 dB of peak headroom when preparing a compressed export.")
+        if db(rms) < -30:
+            tips.append("Average level is low. Check recording gain first; use final loudness processing after balancing the mix. Boosting also raises noise.")
+        crest = db(peak) - db(rms)
+        if crest < 6:
+            tips.append("Peak-to-average contrast is low. If the vocal sounds flattened, reduce compression or limiting. Sustained notes can also produce this reading.")
+        elif crest > 22:
+            tips.append("Peaks are much louder than the average. Listen for uneven phrases or guitar attacks; try gentle compression rather than simply increasing volume.")
+        # Sum channel powers, avoiding cancellation from a mono downmix.
+        n = 4096
+        power = np.zeros(n // 2 + 1)
+        for start in range(0, len(y) - n + 1, n):
+            spectrum = np.fft.rfft(y[start:start+n] * np.hanning(n)[:, None], axis=0)
+            power += np.sum(np.abs(spectrum) ** 2, axis=1)
+        freq = np.fft.rfftfreq(n, 1 / sr)
+        total = float(power.sum()) + 1e-20
+        if power[freq < 70].sum() / total > .2:
+            tips.append("Strong energy below 70 Hz: check for rumble or handling noise. Try a gentle 60–70 Hz low cut, listening carefully to the guitar's low strings.")
+        if power[(freq >= 200) & (freq <= 450)].sum() / total > .5:
+            tips.append("Low-mid energy dominates. If it sounds boxy, try a small 1–3 dB cut with Boxiness / mud. This may also be the natural notes of the performance.")
+        left, right = y[:, 0], y[:, 1]
+        if np.std(left) > 1e-5 and np.std(right) > 1e-5 and np.corrcoef(left, right)[0, 1] < -.2:
+            tips.append("The channels are negatively correlated. Check playback in mono; reduce stereo widening or delayed doubles if the voice becomes hollow.")
+    if not tips:
+        tips.append("No obvious issues were flagged by these checks. Listen for clear words, natural guitar sustain and balanced backing voices before exporting.")
+    return {"seconds": round(len(y)/sr, 1), "peak_db": db(peak), "rms_db": db(rms), "near_full_scale_percent": round(near, 4), "tips": tips}
 
 
 def analyse(fid):

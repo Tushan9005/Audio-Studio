@@ -84,7 +84,31 @@ input[type=number] { width: 100px; }
 input[type=range] { accent-color: var(--amber); width: 100%; }
 textarea { width: 100%; resize: vertical; }
 .note { color: var(--mute); font-size: 12.5px; margin: 0; }
-.presets { margin-bottom: 12px; }
+.presets { margin: 0; flex-wrap: nowrap; align-items: center; }
+.cover-choices { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+.cover-choices small { display: block; font-size: 9px; line-height: 1; opacity: .75; }
+.cover-choices .chosen { box-shadow: 0 0 0 2px var(--amber2); }
+.fx-commandbar { position: sticky; top: -1px; z-index: 12; display: grid; grid-template-columns: minmax(220px, .8fr) minmax(300px, 1fr) auto; align-items: center; gap: 16px; margin: -2px 0 10px; padding: 12px 14px; border: 1px solid #394355; border-radius: 13px; background: rgba(22, 27, 34, .96); box-shadow: 0 12px 30px rgba(0, 0, 0, .34); backdrop-filter: blur(14px); }
+.fx-command-copy { min-width: 0; }
+.fx-command-copy strong { display: block; color: var(--ink); font-size: 15.5px; line-height: 1.25; }
+.fx-command-copy p { margin: 3px 0 0; color: var(--mute); font-size: 11.5px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-eyebrow, .fx-group-label { display: block; margin-bottom: 3px; color: var(--amber2); font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.fx-command-presets { min-width: 0; }
+.fx-command-presets .cover-choices { justify-content: flex-start; flex-wrap: nowrap; }
+.fx-command-presets .btn { min-height: 38px; padding: 6px 12px; }
+.fx-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.personal-presets { margin-bottom: 12px; }
+.personal-presets select { min-width: 220px; }
+#fxBypass[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+.fx-actions .btn.big { margin-top: 0; }
+#fxPreview.on { background: #153b27; border-color: var(--green); color: #bbf7d0; }
+.fx-optionsbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: #111720; }
+.fx-optionsbar .cover-help { margin: 0; color: var(--mute); font-size: 12px; }
+.fx-optionsbar .presets label { min-width: 210px; }
+.grid.fx { grid-template-columns: repeat(3, minmax(245px, 1fr)); align-items: start; }
+.grid.fx .card { position: relative; overflow: hidden; border-color: #30394a; box-shadow: 0 8px 22px rgba(0,0,0,.12); }
+.grid.fx .card::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, var(--amber), transparent 72%); opacity: .7; }
+.grid.fx .card h3 { padding-bottom: 8px; border-bottom: 1px solid rgba(139,150,168,.16); font-size: 14px; letter-spacing: .01em; }
 .disabled-card { opacity: .45; pointer-events: none; }
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .stat { background: #0f141c; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
@@ -98,6 +122,9 @@ textarea { width: 100%; resize: vertical; }
 .toast.err { border-left-color: var(--red); }
 @media (prefers-reduced-motion: reduce) { .spin, .rec-bar .dot { animation: none; } }
 @media (max-width: 860px) { .layout { grid-template-columns: 1fr; height: auto; } .lib { border-right: 0; border-bottom: 1px solid var(--line); max-height: 45vh; } }
+@media (max-width: 1280px) { .fx-commandbar { grid-template-columns: minmax(190px, .75fr) minmax(280px, 1fr); } .fx-actions { grid-column: 1 / -1; justify-content: stretch; } .fx-actions .btn { flex: 1; } .grid.fx { grid-template-columns: repeat(2, minmax(245px, 1fr)); } }
+@media (max-width: 900px) { .fx-commandbar { grid-template-columns: 1fr; gap: 10px; } .fx-command-copy p { white-space: normal; } .fx-command-presets .cover-choices { flex-wrap: wrap; } .fx-actions { grid-column: auto; } .fx-optionsbar { align-items: flex-start; flex-direction: column; } .fx-optionsbar .presets { width: 100%; } .fx-optionsbar .presets label { flex: 1; } .grid.fx { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .cover-choices { justify-content: flex-start; } .fx-commandbar { position: sticky; top: 0; border-radius: 10px; padding: 10px; } .fx-command-copy, .fx-command-presets { display: none; } .fx-actions .btn.big { padding: 10px 12px; font-size: 13.5px; } }
 
 /* ── practice, split progress, tuner ── */
 .top-right { display: flex; align-items: center; gap: 14px; }
@@ -128,3 +155,8 @@ textarea { width: 100%; resize: vertical; }
 .tn-opts input[type=number] { width: 80px; }
 @media (prefers-reduced-motion: reduce) { .tn-needle, .bar i { transition: none; } }
 .rate-tag { background: #2a2110; color: var(--amber2); border: 1px solid #6b4f12; border-radius: 99px; padding: 1px 9px; font-size: 12px; font-weight: 700; }
+.layer-track { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:16px; margin-top:12px; background:#111720; border:1px solid var(--line); border-left:3px solid var(--amber); border-radius:10px; }
+.layer-track select { max-width:240px; }
+.layer-name { background:transparent; border:1px solid var(--line); border-radius:6px; padding:8px; width:140px; }
+.tabs { overflow-x:auto; }
+.tabs button { white-space:nowrap; }

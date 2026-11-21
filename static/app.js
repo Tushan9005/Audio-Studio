@@ -2,7 +2,8 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
-  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, rate: 1, abPlay: false, gapT: null };
+  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
+  var fxAudioContext = null, fxSources = new WeakMap(), fxRebuildTimer = null;
 
   // ── helpers ──
   function fmt(t) { t = Math.max(0, t || 0); var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
@@ -137,6 +138,7 @@
   function showStage() { $('empty').hidden = !!S.cur; $('stage').hidden = !S.cur; }
   function select(id) {
     var f = byId(id); if (!f) return;
+    stopFxPreview();
     S.cur = id; showStage(); drawList();
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
@@ -172,7 +174,10 @@
     document.querySelectorAll('[data-video-only]').forEach(function (el) { el.disabled = f.kind !== 'video'; });
     document.querySelectorAll('[data-needs-video]').forEach(function (el) { el.hidden = f.kind === 'video'; });
     document.querySelector('[data-do="video_music"]').disabled = f.kind !== 'video';
-    document.querySelector('[data-do="effects"]').disabled = f.kind !== 'audio';
+    var fxButton = document.querySelector('[data-do="effects"]');
+    fxButton.disabled = !hasSound;
+    fxButton.textContent = f.kind === 'video' ? 'Polish video sound → new MP4' : 'Apply effects → new copy';
+    $('fxPreview').disabled = !hasSound;
   }
   function showSel() {
     var r = S.region;
@@ -277,6 +282,37 @@
   });
 
   // ── tabs ──
+  function addVocalLayer(name, shift, db, pan, delay) {
+    if ($('layerTracks').children.length >= 8) { toast('Maximum eight layers.', true); return; }
+    var row = document.createElement('div'); row.className = 'layer-track';
+    row.innerHTML = '<label>Part<input class="layer-name" value="' + esc(name) + '"></label><label>Source<select data-layer="source"><option value="">Selected lead</option></select></label>' +
+      [['shift','Pitch (semitones)',-12,12,shift,1],['db','Level (dB)',-36,6,db,1],['pan','Pan (−1 left / +1 right)',-1,1,pan,.1],['delay','Start offset (ms)',0,5000,0,10]].map(function (v) { return '<label>' + v[1] + '<input type="number" data-layer="' + v[0] + '" min="' + v[2] + '" max="' + v[3] + '" value="' + v[4] + '" step="' + v[5] + '"></label>'; }).join('') + '<label class="tick"><input type="checkbox" data-layer="mute">Mute</label><label class="tick"><input type="checkbox" data-layer="solo">Solo</label><button class="btn ghost" type="button">Remove</button>';
+    S.files.filter(function (f) { return f.kind === 'audio'; }).forEach(function (f) { row.querySelector('select').add(new Option(f.name, f.id)); });
+    row.querySelector('button').onclick = function () { row.remove(); };
+    $('layerTracks').appendChild(row);
+    row.querySelector('[data-layer="delay"]').value = delay || 0;
+  }
+  var layerArrangements = {
+    intimate: {name:'Intimate double — start here', help:'Lead plus a quiet 18 ms copy for subtle thickness. No harmony notes are added. For a true double, choose a second sung take and reset its offset to 0, then align it.', tracks:[['Lead',0,-3,0],['Soft double',0,-18,.15,18]]},
+    wide: {name:'Wide pop doubles', help:'Centered lead with quiet left/right delayed copies. Useful for a fuller chorus. Check mono compatibility; replace the copies with separate takes for natural double tracking.', tracks:[['Lead',0,-3,0],['Double left',0,-18,-.8,18],['Double right',0,-18,.8,32]]},
+    low: {name:'Warm lower octave', help:'A quiet octave below supports the lead without adding a third. Useful for gentle weight; lower the octave if it becomes muddy or artificial.', tracks:[['Lead',0,-3,0],['Lower octave',-12,-18,0]]},
+    air: {name:'Upper octave lift', help:'A very quiet octave above for a bright chorus lift. Large shifts can sound thin with the current engine; keep this layer low.', tracks:[['Lead',0,-3,0],['Upper octave',12,-21,.25]]},
+    octaves: {name:'Three octave stack', help:'Lead, lower octave and upper octave for a larger hook. The low part follows the melody, not the chord roots. Use sparingly and listen for pitch-shifting artifacts.', tracks:[['Lead',0,-3,0],['Lower octave',-12,-18,-.25],['Upper octave',12,-21,.25]]},
+    fifth: {name:'Open fifth duet — check chords', help:'Lead with a quiet +7 semitone fifth. This is a fixed parallel harmony and may clash with some notes or chords. Solo the harmony to check it.', tracks:[['Lead',0,-3,0],['Fifth',7,-15,.4]]},
+    major: {name:'Major third + fifth + bass — fixed', help:'The original four-part arrangement. +4 and +7 are fixed intervals: choosing this does not set a major key or make every note fit your song.', tracks:[['Lead',0,-3,0],['Major third',4,-12,-.5],['Fifth',7,-15,.5],['Octave bass',-12,-18,0]]},
+    minor: {name:'Minor third + fifth + bass — fixed', help:'Darker fixed +3 and +7 harmonies with a lower octave. This is not an automatic minor-key arrangement; check each phrase against your chords.', tracks:[['Lead',0,-3,0],['Minor third',3,-12,-.5],['Fifth',7,-15,.5],['Octave bass',-12,-18,0]]}
+  };
+  Object.keys(layerArrangements).forEach(function (key) { $('layerPreset').add(new Option(layerArrangements[key].name, key)); });
+  $('layerPreset').onchange = function () { $('layerPresetHelp').textContent = 'Selected preset: ' + layerArrangements[this.value].help + ' Click Load arrangement to apply.'; };
+  $('layerPreset').onchange();
+  $('layerAdd').onclick = function () { addVocalLayer('Harmony', 0, -9, 0); };
+  $('layerStack').onclick = function () {
+    if ($('layerTracks').children.length && !confirm('Replace the current layer arrangement?')) return;
+    $('layerTracks').replaceChildren();
+    var preset = layerArrangements[$('layerPreset').value];
+    preset.tracks.forEach(function (v) { addVocalLayer.apply(null,v); });
+    $('layerPresetHelp').textContent = 'Loaded: ' + preset.name + '. ' + preset.help;
+  };
   document.querySelector('.tabs').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-t]'); if (!b) return;
     document.querySelectorAll('.tabs button').forEach(function (x) { x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
@@ -287,8 +323,8 @@
   function outFor(inp) {
     var o = inp.parentNode.querySelector('output'); if (!o) return;
     var v = Number(inp.value), k = inp.getAttribute('data-fx') || inp.id;
-    var unit = { noise: '', highpass: v ? ' Hz' : ' off', reverb: '%', echo: '%', room: ' s', echo_ms: ' ms', speed: '×', pitch: ' st', comp: '', width: '', vSpeed: '×' }[k];
-    if (/Db$|^vol$|vmOrig|vMdb/.test(k) || ['bass', 'mid', 'presence', 'treble'].indexOf(k) >= 0) o.textContent = (v > 0 ? '+' : '') + v + ' dB';
+    var unit = { noise: '', highpass: v ? ' Hz' : ' off', reverb: '%', reverb_tone: '%', predelay: ' ms', echo: '%', room: ' s', echo_ms: ' ms', speed: '×', pitch: ' st', comp: '', width: '', vSpeed: '×' }[k];
+    if (/Db$|^vol$|vmOrig|vMdb/.test(k) || ['bass', 'mud', 'mid', 'presence', 'treble'].indexOf(k) >= 0) o.textContent = (v > 0 ? '+' : '') + v + ' dB';
     else if (k === 'highpass') o.textContent = v ? v + ' Hz' : 'off';
     else o.textContent = (k === 'pitch' && v > 0 ? '+' : '') + v + (unit || '');
   }
@@ -303,6 +339,7 @@
       else el.value = el.defaultValue;
       if (el.type === 'range') outFor(el);
     });
+    scheduleFxPreview();
   }
   $('fxReset').addEventListener('click', function () { fxReset(); $('preset').value = ''; });
   $('preset').addEventListener('change', function () {
@@ -313,21 +350,201 @@
       if (el.type === 'checkbox') el.checked = !!p[k]; else el.value = p[k];
       if (el.type === 'range') outFor(el);
     });
+    scheduleFxPreview();
+  });
+  var coverHelp = {
+    cover_natural: 'Natural keeps the words clear, warms the guitar and adds a believable room around you.',
+    cover_intimate: 'Intimate sounds close to the listener, with just enough space to avoid sounding dry.',
+    cover_spacious: 'Spacious gives sustained notes a wider, longer tail while keeping the first word clear.'
+  };
+  document.querySelector('.cover-choices').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-cover-preset]'); if (!b) return;
+    var key = b.getAttribute('data-cover-preset'); $('preset').value = key;
+    $('preset').dispatchEvent(new Event('change'));
+    document.querySelectorAll('[data-cover-preset]').forEach(function (x) { x.classList.toggle('chosen', x === b); });
+    $('coverHelp').textContent = coverHelp[key];
+    toast('“' + b.textContent.trim().replace(/\s+/g, ' ') + '” settings loaded. Click Apply effects when ready.');
   });
   function fxValues() {
     var o = {};
     document.querySelectorAll('[data-fx]').forEach(function (el) { o[el.getAttribute('data-fx')] = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value; });
     return o;
   }
+  var personalSounds = {};
+  try { var savedSounds = JSON.parse(localStorage.getItem('audioStudio.personalSounds') || '{}'); if (savedSounds && typeof savedSounds === 'object' && !Array.isArray(savedSounds)) personalSounds = savedSounds; } catch (e) {}
+  function listPersonalSounds() {
+    $('myPreset').replaceChildren(new Option('Choose a saved sound…', ''));
+    Object.keys(personalSounds).sort().forEach(function (name) { $('myPreset').add(new Option(name, name)); });
+  }
+  function persistSounds(next) {
+    try { localStorage.setItem('audioStudio.personalSounds', JSON.stringify(next)); personalSounds = next; listPersonalSounds(); return true; }
+    catch (e) { toast('This browser could not save your sounds. Check available browser storage.', true); return false; }
+  }
+  listPersonalSounds();
+  $('saveMyPreset').addEventListener('click', function () {
+    var name = prompt('Name this sound (for example: My warm acoustic cover)');
+    if (!name || !name.trim()) return; name = name.trim().slice(0, 80);
+    if (Object.prototype.hasOwnProperty.call(personalSounds, name) && !confirm('Replace the saved sound “' + name + '”?')) return;
+    var next = Object.assign(Object.create(null), personalSounds); next[name] = fxValues();
+    if (persistSounds(next)) { $('myPreset').value = name; toast('Sound saved in this browser.'); }
+  });
+  $('myPreset').addEventListener('change', function () {
+    var settings = personalSounds[this.value]; if (!settings || typeof settings !== 'object') return;
+    fxReset();
+    document.querySelectorAll('[data-fx]').forEach(function (el) {
+      var value = settings[el.getAttribute('data-fx')]; if (value == null) return;
+      if (el.type === 'checkbox') el.checked = !!Number(value); else el.value = value;
+      if (el.type === 'range') outFor(el);
+    });
+    $('preset').value = '';
+    document.querySelectorAll('[data-cover-preset]').forEach(function (b) { b.classList.remove('chosen'); });
+    $('coverHelp').textContent = 'Personal sound: ' + this.value;
+    scheduleFxPreview();
+  });
+  $('deleteMyPreset').addEventListener('click', function () {
+    var name = $('myPreset').value; if (!name || !confirm('Delete saved sound “' + name + '”?')) return;
+    var next = Object.assign(Object.create(null), personalSounds); delete next[name]; persistSounds(next);
+  });
+  $('fxBypass').addEventListener('click', function () {
+    var q = S.fxPreview; if (!q) return;
+    if (!q.bypassed) {
+      q.source.disconnect(); q.nodes.forEach(function (n) { try { n.disconnect(); } catch (e) {} });
+      q.source.connect(q.ac.destination); q.bypassed = true;
+      this.textContent = 'Hear effects'; this.setAttribute('aria-pressed', 'true');
+      $('fxPreviewNote').textContent = 'ORIGINAL — preview effects bypassed for comparison.';
+    } else {
+      q.bypassed = false; buildFxPreview(); this.textContent = 'Hear original'; this.setAttribute('aria-pressed', 'false');
+      $('fxPreviewNote').textContent = 'LIVE — controls and presets update the sound instantly.';
+    }
+  });
+
+  // ── live effects preview (Web Audio; the saved copy is still rendered by the high-quality server chain) ──
+  function fxNumber(p, key, fallback) {
+    var n = Number(p[key]); return Number.isFinite(n) ? n : fallback;
+  }
+  function makePreviewImpulse(ac, room, predelay, brightness) {
+    var sr = ac.sampleRate, pre = Math.round(sr * predelay / 1000), tail = Math.max(1, Math.round(sr * room));
+    var buf = ac.createBuffer(2, pre + tail, sr), seed = 7, peak = 0;
+    function rnd() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) / 2147483648) - 1; }
+    var cutoff = 2800 + brightness / 100 * 8200, a = 1 - Math.exp(-2 * Math.PI * Math.min(cutoff, sr * .46) / sr);
+    for (var ch = 0; ch < 2; ch++) {
+      var data = buf.getChannelData(ch), lp = 0;
+      for (var i = 0; i < tail; i++) {
+        lp += a * (rnd() - lp);
+        var t = i / sr, env = Math.exp(-6.9 * t / room), fade = Math.min(1, t / .018);
+        var v = lp * env * fade * .16; data[pre + i] = v; peak = Math.max(peak, Math.abs(v));
+      }
+    }
+    [[0,.72,.68],[13,.38,.20],[23,.18,.34],[37,.25,.15],[53,.12,.22],[79,.12,.08]].forEach(function (r) {
+      var k = pre + Math.round(sr * r[0] / 1000); if (k >= buf.length) return;
+      var l = buf.getChannelData(0), rr = buf.getChannelData(1); l[k] += r[1]; rr[Math.min(buf.length - 1, k + 31)] += r[2];
+      peak = Math.max(peak, Math.abs(l[k]), Math.abs(rr[Math.min(buf.length - 1, k + 31)]));
+    });
+    // unit energy, exactly like the saved render (app/ops.py _impulse), so preview and saved file match
+    var energy = 0;
+    for (var e = 0; e < 2; e++) { var de = buf.getChannelData(e); for (var q = 0; q < de.length; q++) energy += de[q] * de[q]; }
+    var norm = energy > 0 ? 1 / Math.sqrt(energy / 2) : 0;
+    for (var c = 0; c < 2; c++) { var d = buf.getChannelData(c); for (var j = 0; j < d.length; j++) d[j] *= norm; }
+    return buf;
+  }
+  function stopFxPreview() {
+    clearTimeout(fxRebuildTimer); fxRebuildTimer = null;
+    var q = S.fxPreview; if (!q) return;
+    q.nodes.forEach(function (n) { try { n.disconnect(); } catch (e) {} });
+    $('fxBypass').disabled = true; $('fxBypass').setAttribute('aria-pressed', 'false'); $('fxBypass').textContent = 'Hear original';
+    try { q.source.disconnect(); q.source.connect(q.ac.destination); } catch (e) {}
+    S.fxPreview = null;
+    $('fxPreview').classList.remove('on'); $('fxPreview').textContent = '▶ Live preview';
+    $('fxPreviewNote').textContent = 'Preview changes instantly. Your original recording is always kept.';
+  }
+  function buildFxPreview() {
+    var old = S.fxPreview, media = S.ws && S.ws.getMediaElement ? S.ws.getMediaElement() : null;
+    if (!old || !media) return;
+    if (old.bypassed) return;
+    old.nodes.forEach(function (n) { try { n.disconnect(); } catch (e) {} });
+    var ac = old.ac, source = old.source, p = fxValues(), last = source, made = [];
+    try { source.disconnect(); } catch (e) {}
+    function biquad(type, frequency, gain, q) {
+      var n = ac.createBiquadFilter(); n.type = type; n.frequency.value = frequency;
+      if (gain != null) n.gain.value = gain; if (q != null) n.Q.value = q;
+      last.connect(n); last = n; made.push(n);
+    }
+    var hp = fxNumber(p, 'highpass', 0); if (hp >= 20) biquad('highpass', hp, null, .71);
+    if (Number(p.hum)) { biquad('notch', 50, null, 8); biquad('notch', 100, null, 8); biquad('notch', 150, null, 8); }
+    var bass = fxNumber(p, 'bass', 0); if (bass) biquad('lowshelf', 110, bass, null);
+    var mud = fxNumber(p, 'mud', 0); if (mud) biquad('peaking', 280, mud, 1.1);
+    var mid = fxNumber(p, 'mid', 0); if (mid) biquad('peaking', 1000, mid, 1.2);
+    var presence = fxNumber(p, 'presence', 0); if (presence) biquad('peaking', 3200, presence, 1);
+    var treble = fxNumber(p, 'treble', 0); if (treble) biquad('highshelf', 8000, treble, null);
+    if (Number(p.lofi)) { biquad('highpass', 180, null, .71); biquad('lowpass', 3800, null, .71); }
+    if (Number(p.radio)) { biquad('highpass', 320, null, .71); biquad('lowpass', 3200, null, .71); }
+    var comp = fxNumber(p, 'comp', 0);
+    if (comp > 0) {
+      var dc = ac.createDynamicsCompressor(); dc.threshold.value = -14 - 2 * comp; dc.ratio.value = 1.5 + comp;
+      dc.knee.value = 12; dc.attack.value = .012; dc.release.value = .18; last.connect(dc); last = dc; made.push(dc);
+      var makeup = ac.createGain(); makeup.gain.value = Math.pow(10, comp * .8 / 20); last.connect(makeup); last = makeup; made.push(makeup);
+    }
+    var sum = ac.createGain(), rv = Math.max(0, Math.min(100, fxNumber(p, 'reverb', 0))) / 100;
+    var dry = ac.createGain(); dry.gain.value = 1 - rv * .6; last.connect(dry); dry.connect(sum); made.push(dry, sum);
+    if (rv > 0) {
+      var conv = ac.createConvolver(); conv.normalize = false;
+      conv.buffer = makePreviewImpulse(ac, Math.max(.3, fxNumber(p, 'room', 1.5)), Math.max(0, fxNumber(p, 'predelay', 20)), Math.max(0, fxNumber(p, 'reverb_tone', 55)));
+      var wet = ac.createGain(); wet.gain.value = rv; last.connect(conv); conv.connect(wet); wet.connect(sum); made.push(conv, wet);
+    }
+    var echo = Math.max(0, Math.min(100, fxNumber(p, 'echo', 0))) / 100;
+    if (echo > 0) {
+      var delay = ac.createDelay(1.6), feedback = ac.createGain(), eg = ac.createGain();
+      delay.delayTime.value = Math.min(1.5, Math.max(.06, fxNumber(p, 'echo_ms', 350) / 1000)); feedback.gain.value = echo * .42; eg.gain.value = echo * .45;
+      last.connect(delay); delay.connect(feedback); feedback.connect(delay); delay.connect(eg); eg.connect(sum); made.push(delay, feedback, eg);
+    }
+    var width = Math.max(0, Math.min(3, fxNumber(p, 'width', 0)));
+    if (width > 0) {
+      var split = ac.createChannelSplitter(2), merge = ac.createChannelMerger(2), w = 1 + width / 2, aa = (1 + w) / 2, bb = (1 - w) / 2;
+      var ll = ac.createGain(), rl = ac.createGain(), lr = ac.createGain(), rr = ac.createGain(); ll.gain.value = rr.gain.value = aa; rl.gain.value = lr.gain.value = bb;
+      sum.connect(split); split.connect(ll,0); split.connect(lr,0); split.connect(rl,1); split.connect(rr,1); ll.connect(merge,0,0); rl.connect(merge,0,0); lr.connect(merge,0,1); rr.connect(merge,0,1);
+      last = merge; made.push(split, merge, ll, rl, lr, rr);
+    } else last = sum;
+    var limiter = ac.createDynamicsCompressor(); limiter.threshold.value = -1; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = .003; limiter.release.value = .1;
+    last.connect(limiter); limiter.connect(ac.destination); made.push(limiter);
+    S.fxPreview = { ac: ac, source: source, nodes: made };
+  }
+  function scheduleFxPreview() {
+    if (!S.fxPreview) return; clearTimeout(fxRebuildTimer);
+    fxRebuildTimer = setTimeout(buildFxPreview, 120);
+  }
+  $('fxPreview').addEventListener('click', function () {
+    if (S.fxPreview) { stopFxPreview(); return; }
+    if (!S.ws || !S.ws.getMediaElement) { toast('Select an audio file or a video with sound first.', true); return; }
+    var media = S.ws.getMediaElement();
+    try {
+      if (!fxAudioContext) fxAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      var source = fxSources.get(media); if (!source) { source = fxAudioContext.createMediaElementSource(media); fxSources.set(media, source); }
+      S.fxPreview = { ac: fxAudioContext, source: source, nodes: [] }; buildFxPreview(); fxAudioContext.resume();
+      this.classList.add('on'); this.textContent = '■ Stop preview';
+      $('fxBypass').disabled = false;
+      $('fxPreviewNote').textContent = 'LIVE — controls and presets update the sound instantly.';
+      if (!S.ws.isPlaying()) S.ws.play();
+    } catch (e) { stopFxPreview(); toast('Live preview could not start in this browser. Reload the page and try again.', true); }
+  });
+  document.querySelectorAll('[data-fx]').forEach(function (el) { el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', scheduleFxPreview); });
 
   // ── run a tool ──
-  var MSG = { effects: 'Applying effects…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',
+  var MSG = { effects: 'Applying effects…', effects_video: 'Polishing the sound and rebuilding your video…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',
               voice: 'Making the voiceover…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', best: 'Finding the best part…', export: 'Saving…' };
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-do]'); if (!b || b.disabled) return;
     var a = b.getAttribute('data-do'), f = curFile();
+    if (a === 'effects' && f && f.kind === 'video') a = 'effects_video';
     if (!f && !b.hasAttribute('data-any') && a !== 'join' && a !== 'beat_reel') { toast('Select a file in the library first.', true); return; }
     var body = { id: f ? f.id : null };
+    if (a === 'vocal_layers') {
+      if (!f || f.kind !== 'audio') { toast('Select a vocals-only audio file first.', true); return; }
+      var tracks = Array.from($('layerTracks').children).map(function (row) { var t = {}; row.querySelectorAll('[data-layer]').forEach(function (el) { t[el.dataset.layer] = el.type === 'checkbox' ? el.checked : el.value; }); return t; });
+      var solo = tracks.some(function (t) { return t.solo; });
+      body.layers = tracks.filter(function (t) { return !t.mute && (!solo || t.solo); });
+      if (!body.layers.length) { toast('Add at least one audible layer.', true); return; }
+      stopFxPreview();
+    }
     if (a === 'trim' || a === 'cut') {
       var s = parseFloat($('selS').value), en = parseFloat($('selE').value);
       if (!(en > s)) { toast('Drag on the waveform (or type From/To) to select a part first.', true); return; }
@@ -338,7 +555,7 @@
     if (a === 'loop') body.times = $('loopN').value;
     if (a === 'join') { body.ids = S.ticks.filter(function (id) { return byId(id).kind === 'audio'; }); body.crossfade = $('xf').value; }
     if (a === 'export') { body.format = $('fmt').value; body.quality = $('qual').value; }
-    if (a === 'effects') body.fx = fxValues();
+    if (a === 'effects' || a === 'effects_video') { body.fx = fxValues(); stopFxPreview(); }
     if (a === 'best') body.length = $('bestLen').value;
     if (a === 'practice') { body.rate = S.rate; if (S.region) { body.start = S.region.start; body.end = S.region.end; } }
     if (a === 'video_music') {
@@ -355,6 +572,11 @@
     if (a === 'voice') { body.text = $('vText').value; body.voice = $('vVoice').value; body.speed = $('vSpeed').value; body.music = $('vMusic').value; body.music_db = $('vMdb').value; body.music_from = $('vFrom').value; }
     busy(true, MSG[a]);
     post('/api/do/' + a, body).then(function (j) {
+      if (j.sound_check) {
+        var report = j.sound_check;
+        $('soundCheckResults').innerHTML = '<p>Checked first ' + esc(report.seconds) + ' s · Sample peak: ' + esc(report.peak_db) + ' dBFS · Average RMS: ' + esc(report.rms_db) + ' dBFS (not LUFS) · Near-full-scale samples: ' + esc(report.near_full_scale_percent) + '%</p><ul>' + report.tips.map(function (tip) { return '<li>' + esc(tip) + '</li>'; }).join('') + '</ul>';
+        return;
+      }
       if (j.analysis) { showStats(j.analysis); return; }
       toast('Done: "' + j.file.name + '" added to the library.');
       return load(j.file.id);

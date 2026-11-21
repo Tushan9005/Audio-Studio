@@ -73,6 +73,32 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
   stayed in "Karaoke"). Not yet tried on a real song; the guitar stem of htdemucs_6s is the weakest of the six.
 - The tuner was tested with Chrome's fake mic (a 108.5 Hz tone read as "A, 24 cents low", which is correct), not his guitar yet.
 
+## Added for acoustic-cover polishing (21 Nov 2026)
+- The Effects tab now starts with one-click Natural, Intimate and Spacious presets specifically for a
+  single phone recording containing singing and acoustic guitar. Natural is the recommended starting point.
+- Reverb: a stereo impulse with band-limited diffusion, early reflections, adjustable pre-delay and
+  brightness; silence is padded through the convolver so the final reverb tail isn't cut off.
+  **Reverb gain (fixed after review):** `afir`'s `dry=` is its *input* gain, so `afir=dry=0` made every saved
+  reverb silent. Before that, v1's default `gtype=peak` normalisation already made reverb ~55 dB too quiet
+  (inaudible). Now: impulse scaled to unit energy per channel + `afir=gtype=none`, so wet ≈ dry level and
+  "Reverb 14%" is a real 14% wet mix (click test: Intimate tail -31 dB, Natural -25, Spacious -20, no clipping).
+  The browser preview impulse (`makePreviewImpulse`) uses the same unit-energy scaling so preview = saved
+  file. Cached impulses are `tmp\ir-v3-*.wav` (v2 files were scaled the old way). Always measure the
+  tail in the gaps after clicks when changing reverb code; listening to the preview alone is not enough.
+- Added a 280 Hz boxiness/mud control. Cover presets use gentle EQ/compression and -14 LUFS mastering.
+- Noise reduction now tracks a conservative -50 dB steady noise floor rather than using the previous aggressive
+  fixed -30 dB floor. Cover presets keep it off and never use a noise gate, protecting quiet guitar sustain.
+- Effects can be applied directly to a phone video. The video stream is copied unchanged, the soundtrack is
+  polished, and a new MP4 is registered as `effects_video`; temporary extracted/processed audio is removed.
+- The Effects tab has a browser-side **Live preview** powered by the Web Audio API. EQ, hum filters,
+  compression, reverb, echo, stereo width and character filters update while WaveSurfer is playing; changing
+  a slider or preset rebuilds the preview graph without saving a file. Noise reduction, de-essing, pitch and
+  final loudness remain render-only and the UI says so. Previewing never changes the original or registers a
+  new workspace file.
+- The Effects UI uses a sticky production command bar, so Natural/Intimate/Spacious, Live preview and Apply
+  effects remain visible while the effect cards scroll. Secondary presets and reset sit in a compact options
+  bar; the responsive layout changes from three cards to two and then one without burying the primary actions.
+
 ## How to test changes
 1. Start the server in the background.
 2. Make test media with the bundled ffmpeg (`aevalsrc` tones, `testsrc2` video, `testsrc` image).

@@ -62,6 +62,7 @@
         <button role="tab" data-t="edit" aria-selected="true">Edit</button>
         <button role="tab" data-t="practice" aria-selected="false">Practice</button>
         <button role="tab" data-t="fx" aria-selected="false">Effects</button>
+        <button role="tab" data-t="layers" aria-selected="false">Vocal layers</button>
         <button role="tab" data-t="video" aria-selected="false">Video</button>
         <button role="tab" data-t="voice" aria-selected="false">Voice</button>
         <button role="tab" data-t="analyse" aria-selected="false">Analyse</button>
@@ -132,18 +133,60 @@
       </div>
 
       <!-- EFFECTS -->
+      <div class="panel" data-p="layers" hidden>
+        <div class="card">
+          <h3>Arrange your vocal layers</h3>
+          <p class="note">1. Select a vocals-only audio file in the library. 2. Add harmonies or choose separately recorded parts. 3. Render the mix, listen, then use Effects for reverb and Edit → Save as to export.</p>
+          <div class="row"><label>Arrangement preset<select id="layerPreset"></select></label><button class="btn" id="layerStack" type="button">Load arrangement</button><button class="btn" id="layerAdd" type="button">Add layer</button><button class="btn primary" data-do="vocal_layers">Render vocal mix</button></div>
+          <p class="note" id="layerPresetHelp" aria-live="polite"></p>
+          <p class="note">These are starting settings inspired by common production techniques, not artist presets. Use your original vocal as the source. Artificial doubles use delayed copies: check the mix in mono for a hollow or phasey sound. Separate sung takes usually sound more natural.</p>
+          <p class="note">Fixed pitch intervals: +3 minor third, +4 major third, +7 fifth, −12 octave bass. These do not automatically follow your key or chords and can change vocal character. For descending lines, record the melody separately and choose it as a source. Mute excludes a layer; Solo includes only soloed layers.</p>
+          <div id="layerTracks"></div>
+        </div>
+      </div>
+
+      <!-- EFFECTS -->
       <div class="panel" data-p="fx" hidden>
-        <div class="row presets"><label>Preset <select id="preset"><option value="">Choose a preset…</option></select></label><button class="btn ghost small" id="fxReset" type="button">Reset all</button></div>
+        <section class="fx-commandbar" aria-label="Effects controls">
+          <div class="fx-command-copy">
+            <span class="fx-eyebrow">Effects workspace</span>
+            <strong>Acoustic cover polish</strong>
+            <p id="fxPreviewNote">Preview changes instantly. Your original recording is always kept.</p>
+          </div>
+          <div class="fx-command-presets">
+            <span class="fx-group-label">Quick sound</span>
+            <div class="cover-choices">
+            <button class="btn primary" type="button" data-cover-preset="cover_natural">Natural <small>recommended</small></button>
+            <button class="btn" type="button" data-cover-preset="cover_intimate">Intimate</button>
+            <button class="btn" type="button" data-cover-preset="cover_spacious">Spacious</button>
+            </div>
+          </div>
+          <div class="fx-actions">
+            <button class="btn" id="fxBypass" type="button" disabled aria-pressed="false" title="Compare with the selected file without preview effects">Hear original</button>
+            <button class="btn big" id="fxPreview" type="button">▶ Live preview</button>
+            <button class="btn primary big" data-do="effects">Apply effects → new copy</button>
+          </div>
+        </section>
+        <div class="fx-optionsbar">
+          <p class="cover-help" id="coverHelp">Natural keeps the words clear, warms the guitar and adds a believable room around you.</p>
+          <div class="row presets"><label>More presets <select id="preset"><option value="">Choose a preset…</option></select></label><button class="btn ghost small" id="fxReset" type="button">Reset all</button></div>
+        </div>
+        <div class="card personal-presets">
+          <div class="row"><label>My sounds <select id="myPreset"><option value="">Choose a saved sound…</option></select></label><button class="btn" id="saveMyPreset" type="button">Save current sound</button><button class="btn ghost" id="deleteMyPreset" type="button">Delete saved sound</button></div>
+          <p class="note">Personal sounds are stored in this browser. Start from your original recording to avoid applying effects twice. Noise reduction, de-essing, pitch and final loudness are applied only when saving the audio.</p>
+        </div>
         <div class="grid fx">
           <div class="card"><h3>Clean up</h3>
-            <label class="slide">Noise reduction <input type="range" data-fx="noise" min="0" max="30" value="0"><output></output></label>
+            <label class="slide">Gentle steady-hiss reduction <input type="range" data-fx="noise" min="0" max="30" value="0"><output></output></label>
             <label class="slide">Low cut (Hz) <input type="range" data-fx="highpass" min="0" max="200" step="10" value="0"><output></output></label>
             <label class="tick"><input type="checkbox" data-fx="hum"> Remove electric hum (50 Hz)</label>
             <label class="tick"><input type="checkbox" data-fx="deess"> Soften harsh "s" sounds</label>
-            <label class="tick"><input type="checkbox" data-fx="silence"> Remove long pauses</label>
+            <label class="tick"><input type="checkbox" data-fx="silence"> Remove long pauses (not recommended for music)</label>
+            <p class="note">The cover presets use no noise gate, so quiet guitar notes and natural string decay are kept. Leave hiss reduction off when the recording is already quiet.</p>
           </div>
           <div class="card"><h3>Tone (EQ)</h3>
             <label class="slide">Bass <input type="range" data-fx="bass" min="-12" max="12" value="0"><output></output></label>
+            <label class="slide">Boxiness / mud <input type="range" data-fx="mud" min="-8" max="6" step="0.5" value="0"><output></output></label>
             <label class="slide">Middle <input type="range" data-fx="mid" min="-12" max="12" value="0"><output></output></label>
             <label class="slide">Presence (voice clarity) <input type="range" data-fx="presence" min="-12" max="12" value="0"><output></output></label>
             <label class="slide">Treble <input type="range" data-fx="treble" min="-12" max="12" value="0"><output></output></label>
@@ -151,6 +194,8 @@
           <div class="card"><h3>Space</h3>
             <label class="slide">Reverb <input type="range" data-fx="reverb" min="0" max="80" value="0"><output></output></label>
             <label class="slide">Room size (s) <input type="range" data-fx="room" min="0.4" max="5" step="0.1" value="1.5"><output></output></label>
+            <label class="slide">Reverb pre-delay <input type="range" data-fx="predelay" min="0" max="80" step="1" value="20"><output></output></label>
+            <label class="slide">Reverb brightness <input type="range" data-fx="reverb_tone" min="0" max="100" step="5" value="55"><output></output></label>
             <label class="slide">Echo <input type="range" data-fx="echo" min="0" max="100" value="0"><output></output></label>
             <label class="slide">Echo delay (ms) <input type="range" data-fx="echo_ms" min="80" max="1200" step="10" value="350"><output></output></label>
             <label class="slide">Stereo width <input type="range" data-fx="width" min="0" max="3" step="0.5" value="0"><output></output></label>
@@ -164,7 +209,6 @@
             <label>Loudness <select data-fx="loud"><option value="">Leave as is</option><option value="-14">Instagram / YouTube / Spotify (-14)</option><option value="-16">Podcast / voice (-16)</option><option value="-23">TV broadcast (-23)</option></select></label>
           </div>
         </div>
-        <button class="btn primary big" data-do="effects">Apply effects → new copy</button>
       </div>
 
       <!-- VIDEO -->
@@ -208,6 +252,12 @@
 
       <!-- ANALYSE -->
       <div class="panel" data-p="analyse" hidden>
+        <div class="card personal-presets">
+          <h3>Recording health &amp; improvement suggestions</h3>
+          <p class="note">Checks the first two minutes for level, possible clipping, dynamics, tonal balance and stereo cancellation. Suggestions are starting points, not a verdict on your singing or whether harmonies fit the chords. Noise, reverb quality and tuning are not judged.</p>
+          <button class="btn primary" data-do="sound_check">Check my sound</button>
+          <div id="soundCheckResults" aria-live="polite"></div>
+        </div>
         <div class="card wide">
           <h3>Tempo, key and loudness</h3>
           <button class="btn primary" data-do="analyse">Analyse this file</button>

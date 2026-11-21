@@ -118,6 +118,7 @@ async def do(action: str, request: Request):
     p = await request.json()
     f = p.get("id")
     acts = {
+        "vocal_layers": lambda: ops.vocal_layers(f, p.get("layers")),
         "trim": lambda: ops.trim(f, p.get("start"), p.get("end")),
         "cut": lambda: ops.cut_out(f, p.get("start"), p.get("end")),
         "fade": lambda: ops.fades(f, p.get("fade_in"), p.get("fade_out")),
@@ -127,6 +128,7 @@ async def do(action: str, request: Request):
         "export": lambda: ops.export(f, p.get("format"), p.get("quality")),
         "extract": lambda: ops.extract_audio(f),
         "effects": lambda: ops.effects(f, p.get("fx") or {}),
+        "effects_video": lambda: ops.effects_video(f, p.get("fx") or {}),
         "best": lambda: ops.best_part(f, p.get("length")),
         "video_music": lambda: ops.music_under_video(f, p.get("music"), p),
         "beat_reel": lambda: ops.beat_reel(p.get("clips") or [], p.get("music"), p),
@@ -135,6 +137,8 @@ async def do(action: str, request: Request):
     }
     if action == "analyse":
         return {"analysis": await run_in_threadpool(ops.analyse, f)}
+    if action == "sound_check":
+        return {"sound_check": await run_in_threadpool(ops.sound_check, f)}
     if action not in acts:
         raise MediaError("Unknown tool.")
     return {"file": await run_in_threadpool(acts[action])}   # long jobs don't freeze the app
