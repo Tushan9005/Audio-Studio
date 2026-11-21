@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Studio</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23111827'/><path d='M7 18v-4M11 22V10M15 25V7M19 20v-8M23 23V9M27 17v-2' stroke='%23f59e0b' stroke-width='2.4' stroke-linecap='round'/></svg>">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 18v-4M11 22V10M15 25V7M19 20v-8M23 23V9M27 17v-2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg> Audio Studio</div>
+  <div class="top-note">Runs only on this PC · files stay in <code>audio-studio\workspace</code></div>
+</header>
+
+<div class="layout">
+  <aside class="lib">
+    <div class="lib-actions">
+      <label class="btn primary" for="up">⬆ Add files</label>
+      <input id="up" type="file" multiple accept="audio/*,video/*,image/*" hidden>
+      <button class="btn rec" id="recBtn" type="button">● Record</button>
+    </div>
+    <div class="rec-bar" id="recBar" hidden><span class="dot"></span><span id="recTime">0:00</span><canvas id="recMeter" width="120" height="22"></canvas><button class="btn small" id="recStop" type="button">■ Stop</button></div>
+    <div class="drop" id="drop">or drop sound, video and photo files here</div>
+    <div class="chips" role="group" aria-label="Show">
+      <button type="button" data-k="all" aria-pressed="true">All</button>
+      <button type="button" data-k="audio" aria-pressed="false">Sound</button>
+      <button type="button" data-k="video" aria-pressed="false">Video</button>
+      <button type="button" data-k="image" aria-pressed="false">Photos</button>
+    </div>
+    <ul class="files" id="files"></ul>
+    <p class="hint">Tick ☐ files to join them or to use them in a beat reel. Every edit makes a new copy; the original is never changed.</p>
+  </aside>
+
+  <main class="main">
+    <section class="empty" id="empty">
+      <h1>Start by adding a song, a video or a recording</h1>
+      <p>Then trim it, add effects, put music under a video, make a beat-synced reel, or create a voiceover.</p>
+    </section>
+
+    <section class="stage" id="stage" hidden>
+      <div class="file-head">
+        <input class="fname" id="fname" aria-label="File name">
+        <span class="meta" id="fmeta"></span>
+        <a class="btn small" id="dl" href="#">⬇ Download</a>
+        <button class="btn small ghost" id="del" type="button">Delete</button>
+      </div>
+      <div class="player">
+        <video id="vid" controls playsinline hidden></video>
+        <img id="img" alt="" hidden>
+        <div id="wave"></div>
+        <div class="transport" id="transport">
+          <button class="btn round" id="play" type="button" aria-label="Play">▶</button>
+          <span class="time" id="time">0:00.0 / 0:00.0</span>
+          <span class="sel" id="selInfo">Drag on the waveform to select a part</span>
+          <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="300" value="0"></label>
+        </div>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-t="edit" aria-selected="true">Edit</button>
+        <button role="tab" data-t="fx" aria-selected="false">Effects</button>
+        <button role="tab" data-t="video" aria-selected="false">Video</button>
+        <button role="tab" data-t="voice" aria-selected="false">Voice</button>
+        <button role="tab" data-t="analyse" aria-selected="false">Analyse</button>
+      </nav>
+
+      <!-- EDIT -->
+      <div class="panel" data-p="edit">
+        <div class="grid">
+          <div class="card"><h3>Selection</h3>
+            <div class="row"><label>From <input type="number" id="selS" step="0.1" min="0"></label><label>To <input type="number" id="selE" step="0.1" min="0"></label></div>
+            <div class="row"><button class="btn" data-do="trim">Keep only this part</button><button class="btn" data-do="cut" data-audio>Remove this part</button></div>
+          </div>
+          <div class="card" data-audio><h3>Fades</h3>
+            <div class="row"><label>Fade in (s) <input type="number" id="fadeIn" value="1" step="0.5" min="0" max="30"></label><label>Fade out (s) <input type="number" id="fadeOut" value="3" step="0.5" min="0" max="30"></label></div>
+            <button class="btn" data-do="fade">Apply fades</button>
+          </div>
+          <div class="card" data-audio><h3>Volume</h3>
+            <label class="slide">Change <input type="range" id="vol" min="-20" max="20" value="3" step="1"><output id="volO">+3 dB</output></label>
+            <button class="btn" data-do="volume">Apply volume</button>
+          </div>
+          <div class="card" data-audio><h3>Loop</h3>
+            <div class="row"><label>Times <input type="number" id="loopN" value="2" min="2" max="50"></label><button class="btn" data-do="loop">Loop it</button></div>
+          </div>
+          <div class="card"><h3>Join ticked sound files</h3>
+            <div class="row"><label>Crossfade (s) <input type="number" id="xf" value="2" step="0.5" min="0" max="10"></label><button class="btn" data-do="join">Join</button></div>
+            <p class="note" id="joinNote">Tick 2 or more sound files in the library.</p>
+          </div>
+          <div class="card"><h3>Save as</h3>
+            <div class="row"><select id="fmt"><option value="mp3">MP3</option><option value="m4a">M4A (iPhone)</option><option value="ogg">OGG</option><option value="flac">FLAC (lossless)</option><option value="wav">WAV</option><option value="mp4">MP4 (video)</option></select>
+            <select id="qual"><option value="128">128 kbps</option><option value="192" selected>192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select>
+            <button class="btn" data-do="export">Save</button></div>
+            <button class="btn" data-do="extract" data-video-only>Take the sound out of this video</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- EFFECTS -->
+      <div class="panel" data-p="fx" hidden>
+        <div class="row presets"><label>Preset <select id="preset"><option value="">Choose a preset…</option></select></label><button class="btn ghost small" id="fxReset" type="button">Reset all</button></div>
+        <div class="grid fx">
+          <div class="card"><h3>Clean up</h3>
+            <label class="slide">Noise reduction <input type="range" data-fx="noise" min="0" max="30" value="0"><output></output></label>
+            <label class="slide">Low cut (Hz) <input type="range" data-fx="highpass" min="0" max="200" step="10" value="0"><output></output></label>
+            <label class="tick"><input type="checkbox" data-fx="hum"> Remove electric hum (50 Hz)</label>
+            <label class="tick"><input type="checkbox" data-fx="deess"> Soften harsh "s" sounds</label>
+            <label class="tick"><input type="checkbox" data-fx="silence"> Remove long pauses</label>
+          </div>
+          <div class="card"><h3>Tone (EQ)</h3>
+            <label class="slide">Bass <input type="range" data-fx="bass" min="-12" max="12" value="0"><output></output></label>
+            <label class="slide">Middle <input type="range" data-fx="mid" min="-12" max="12" value="0"><output></output></label>
+            <label class="slide">Presence (voice clarity) <input type="range" data-fx="presence" min="-12" max="12" value="0"><output></output></label>
+            <label class="slide">Treble <input type="range" data-fx="treble" min="-12" max="12" value="0"><output></output></label>
+          </div>
+          <div class="card"><h3>Space</h3>
+            <label class="slide">Reverb <input type="range" data-fx="reverb" min="0" max="80" value="0"><output></output></label>
+            <label class="slide">Room size (s) <input type="range" data-fx="room" min="0.4" max="5" step="0.1" value="1.5"><output></output></label>
+            <label class="slide">Echo <input type="range" data-fx="echo" min="0" max="100" value="0"><output></output></label>
+            <label class="slide">Echo delay (ms) <input type="range" data-fx="echo_ms" min="80" max="1200" step="10" value="350"><output></output></label>
+            <label class="slide">Stereo width <input type="range" data-fx="width" min="0" max="3" step="0.5" value="0"><output></output></label>
+          </div>
+          <div class="card"><h3>Pitch, speed &amp; colour</h3>
+            <label class="slide">Pitch (semitones) <input type="range" data-fx="pitch" min="-12" max="12" value="0"><output></output></label>
+            <label class="slide">Speed <input type="range" data-fx="speed" min="0.5" max="2" step="0.05" value="1"><output></output></label>
+            <label class="slide">Compression <input type="range" data-fx="comp" min="0" max="5" value="0"><output></output></label>
+            <label class="tick"><input type="checkbox" data-fx="lofi"> Lo-fi</label>
+            <label class="tick"><input type="checkbox" data-fx="radio"> Old radio</label>
+            <label>Loudness <select data-fx="loud"><option value="">Leave as is</option><option value="-14">Instagram / YouTube / Spotify (-14)</option><option value="-16">Podcast / voice (-16)</option><option value="-23">TV broadcast (-23)</option></select></label>
+          </div>
+        </div>
+        <button class="btn primary big" data-do="effects">Apply effects → new copy</button>
+      </div>
+
+      <!-- VIDEO -->
+      <div class="panel" data-p="video" hidden>
+        <div class="grid">
+          <div class="card wide"><h3>Put music under this video</h3>
+            <p class="note" data-needs-video>Select a video in the library first.</p>
+            <div class="row"><label>Music <select class="music-pick" id="vmMusic"></select></label><label>Music starts at (s) <input type="number" id="vmFrom" value="0" min="0" step="1"></label></div>
+            <label class="slide">Music volume (dB) <input type="range" id="vmDb" min="-30" max="6" value="-6"><output></output></label>
+            <div class="row"><label class="tick"><input type="checkbox" id="vmKeep" checked> Keep the video's own sound</label><label class="tick"><input type="checkbox" id="vmDuck" checked> Lower music when someone speaks</label></div>
+            <label class="slide">Video's own sound (dB) <input type="range" id="vmOrig" min="-30" max="10" value="0"><output></output></label>
+            <div class="row"><label>Fade out (s) <input type="number" id="vmFade" value="2" min="0" max="10" step="0.5"></label><button class="btn primary" data-do="video_music">Make video</button></div>
+          </div>
+          <div class="card wide"><h3>Beat reel: cut ticked clips &amp; photos to the music</h3>
+            <div class="row"><label>Music <select class="music-pick" id="brMusic"></select></label><label>Music starts at (s) <input type="number" id="brFrom" value="0" min="0" step="1"></label></div>
+            <div class="row"><label>Shape <select id="brAspect"><option value="9:16">9:16 Reel / Story</option><option value="4:5">4:5 Instagram post</option><option value="1:1">1:1 Square</option><option value="16:9">16:9 YouTube</option></select></label>
+            <label>Length (s) <select id="brLen"><option>15</option><option selected>30</option><option>45</option><option>60</option><option>90</option></select></label>
+            <label>Change shot every <select id="brPer"><option value="1">1 beat</option><option value="2">2 beats</option><option value="4" selected>4 beats</option><option value="8">8 beats</option></select></label></div>
+            <p class="note" id="brNote">Tick videos or photos in the library (they're used in list order, repeating if needed).</p>
+            <button class="btn primary" data-do="beat_reel">Make beat reel</button>
+          </div>
+          <div class="card"><h3>Best part of a song</h3>
+            <p class="note">Finds the liveliest stretch, starting on a beat, with fades. For Reels and Stories.</p>
+            <div class="row"><label>Length <select id="bestLen"><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label><button class="btn" data-do="best" data-audio>Find it</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VOICE -->
+      <div class="panel" data-p="voice" hidden>
+        <div class="card wide">
+          <h3>Voiceover (English, made on this PC)</h3>
+          <textarea id="vText" rows="5" maxlength="4000" placeholder="Type what the voice should say…"></textarea>
+          <div class="row"><label>Voice <select id="vVoice"></select></label>
+          <label class="slide">Speed <input type="range" id="vSpeed" min="0.7" max="1.4" step="0.05" value="1"><output></output></label></div>
+          <div class="row"><label>Background music <select class="music-pick" id="vMusic" data-none="1"></select></label><label>Starts at (s) <input type="number" id="vFrom" value="0" min="0"></label>
+          <label class="slide">Music volume (dB) <input type="range" id="vMdb" min="-30" max="0" value="-14"><output></output></label></div>
+          <button class="btn primary" data-do="voice" data-any>Make voiceover</button>
+        </div>
+      </div>
+
+      <!-- ANALYSE -->
+      <div class="panel" data-p="analyse" hidden>
+        <div class="card wide">
+          <h3>Tempo, key and loudness</h3>
+          <button class="btn primary" data-do="analyse">Analyse this file</button>
+          <div class="stats" id="stats"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="busy" id="busy" hidden><div class="spin"></div><p id="busyMsg">Working…</p></div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="vendor/wavesurfer.min.js"></script>
+<script src="vendor/regions.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
