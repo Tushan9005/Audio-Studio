@@ -126,7 +126,7 @@ Run manually: `.venv\Scripts\python.exe -m uvicorn app.server:app --host 127.0.0
 10. Cover-video helper: sync a phone video of him playing with the studio recording → Reel
 
 ## UI refresh + drag trimmer (21 Nov 2026)
-- Look: "home studio at night". Warm walnut surfaces with one amber accent; tokens are on `:root` in
+- Look: "home studio at night" (full design guide: `.interface-design/system.md`; read it before touching `static/`). Warm walnut surfaces with one amber accent; tokens are on `:root` in
   static/app.css (`--room/--desk/--rack/--inset`, `--wire*` hairlines, `--ink..--ink-4`, `--glow*`). Fonts are
   Segoe UI Variable (Windows 11) with Cascadia Mono/Consolas for time counters. No web fonts, so it stays offline.
   Depth = tonal surfaces + hairline borders (no drop shadows on cards).
