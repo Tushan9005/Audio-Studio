@@ -30,15 +30,19 @@
     </form>
     <label class="btn project-import" for="projectImport">Restore project backup</label><input id="projectImport" type="file" accept=".zip,application/zip" hidden>
     <div class="drop" id="drop">or drop songs, videos and photos here</div>
-    <div class="lib-head"><span>Library</span><span id="libCount"></span></div>
+    <div class="lib-head"><span>Library</span><span class="lib-meta"><button type="button" id="bulkSelectVisible">Select shown</button><span id="libCount"></span></span></div>
     <div class="chips" role="group" aria-label="Show">
       <button type="button" data-k="all" aria-pressed="true">All</button>
       <button type="button" data-k="audio" aria-pressed="false">Sound</button>
       <button type="button" data-k="video" aria-pressed="false">Video</button>
       <button type="button" data-k="image" aria-pressed="false">Photos</button>
     </div>
+    <div class="bulk-bar" id="bulkBar" hidden>
+      <div><b id="bulkCount">0 selected</b><button type="button" id="bulkClear">Clear</button></div>
+      <div><button class="btn small" type="button" id="bulkDownload">Download ZIP</button><button class="btn small danger" type="button" id="bulkDelete">Delete selected</button></div>
+    </div>
     <ul class="files" id="files"></ul>
-    <p class="hint">Tick ☐ files to join them or to use them in a beat reel. Every edit makes a new copy; the original is never changed.</p>
+    <p class="hint">Tick files to download or delete them together, join sound files, or make a beat reel. Every edit makes a new copy; the original is never changed.</p>
   </aside>
 
   <main class="main">

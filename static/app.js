@@ -283,6 +283,11 @@
       if (selectId) select(selectId);
       else if (S.cur && !byId(S.cur)) { S.cur = null; showStage(); }
       if (!S.cur && S.files.length && !selectId) select(S.files[0].id);
+      if (!S.files.length) {
+        S.cur = null; showStage();
+        if (S.ws) { S.ws.destroy(); S.ws = null; S.region = null; }
+        $('vid').pause(); $('vid').removeAttribute('src'); $('img').removeAttribute('src');
+      }
       updateNotes();
     });
   }
@@ -297,6 +302,18 @@
     }).join('');
     $('files').innerHTML = html || '<li class="none">Nothing here yet. Add a song or press Record.</li>';
     $('libCount').textContent = S.files.length ? S.files.length + (S.files.length === 1 ? ' file' : ' files') : '';
+    updateBulkBar();
+  }
+  function updateBulkBar() {
+    var count = S.ticks.length;
+    var visible = S.files.filter(function (file) { return S.filter === 'all' || file.kind === S.filter; });
+    var allVisible = visible.length && visible.every(function (file) { return S.ticks.indexOf(file.id) >= 0; });
+    $('bulkBar').hidden = !count;
+    $('bulkCount').textContent = count + ' selected';
+    $('bulkSelectVisible').textContent = allVisible ? 'Unselect shown' : 'Select shown';
+    $('bulkSelectVisible').disabled = !visible.length;
+    $('bulkDownload').disabled = !count;
+    $('bulkDelete').disabled = !count;
   }
   function fillMusic() {
     document.querySelectorAll('.music-pick').forEach(function (sel) {
@@ -321,6 +338,35 @@
       drawList(); updateNotes(); return;
     }
     select(id);
+  });
+  $('bulkClear').addEventListener('click', function () { S.ticks = []; drawList(); updateNotes(); });
+  $('bulkSelectVisible').addEventListener('click', function () {
+    var visible = S.files.filter(function (file) { return S.filter === 'all' || file.kind === S.filter; });
+    var unselect = visible.length && visible.every(function (file) { return S.ticks.indexOf(file.id) >= 0; });
+    visible.forEach(function (file) { var index = S.ticks.indexOf(file.id); if (unselect && index >= 0) S.ticks.splice(index, 1); else if (!unselect && index < 0) S.ticks.push(file.id); });
+    drawList(); updateNotes();
+  });
+  $('bulkDownload').addEventListener('click', function () {
+    var ids = S.ticks.slice(), button = this; if (!ids.length) return;
+    button.disabled = true; button.textContent = 'Preparing…';
+    fetch('/api/files/bulk-download', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ ids:ids }) }).then(function (response) {
+      if (!response.ok) return response.json().then(function (body) { throw new Error(body.error || 'Download failed.'); });
+      return response.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'Audio Studio selected files.zip';
+        document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+        toast(ids.length + ' selected file' + (ids.length === 1 ? '' : 's') + ' downloaded as a ZIP.');
+      });
+    }).catch(function (error) { toast(error.message || 'Bulk download failed.', true); }).finally(function () { button.disabled = false; button.textContent = 'Download ZIP'; });
+  });
+  $('bulkDelete').addEventListener('click', function () {
+    var ids = S.ticks.slice(), button = this; if (!ids.length) return;
+    var names = ids.map(function (id) { var file = byId(id); return file ? file.name : id; });
+    if (!confirm('Permanently delete ' + ids.length + ' selected file' + (ids.length === 1 ? '' : 's') + '?\n\n' + names.slice(0, 5).join('\n') + (names.length > 5 ? '\n…and ' + (names.length - 5) + ' more' : '') + '\n\nThis cannot be undone.')) return;
+    button.disabled = true; button.textContent = 'Deleting…';
+    post('/api/files/bulk-delete', { ids:ids }).then(function (result) {
+      if (ids.indexOf(S.cur) >= 0) { stopCoach(true); S.cur = null; }
+      S.ticks = []; return load().then(function () { toast(result.count + ' file' + (result.count === 1 ? '' : 's') + ' deleted.'); });
+    }).catch(function (error) { toast(error.message || 'Bulk delete failed.', true); }).finally(function () { button.disabled = false; button.textContent = 'Delete selected'; });
   });
   document.querySelector('.chips').addEventListener('click', function (e) {
     var b = e.target.closest('button'); if (!b) return;

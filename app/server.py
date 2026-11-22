@@ -1,5 +1,5 @@
 """Audio Studio: a small local web app (http://127.0.0.1:8765), only reachable from this PC."""
-import importlib.util, os, secrets, shutil, threading, time
+import importlib.util, os, secrets, shutil, threading, time, zipfile
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -72,6 +72,55 @@ async def upload(files: list[UploadFile] = File(...)):
             os.remove(path)
             raise
     return {"files": out}
+
+
+def _bulk_items(ids):
+    if not isinstance(ids, list) or not ids:
+        raise MediaError("Select at least one library file.")
+    unique = []
+    for fid in ids:
+        if isinstance(fid, str) and fid not in unique:
+            unique.append(fid)
+    if not unique or len(unique) > 200:
+        raise MediaError("Select between 1 and 200 library files.")
+    return [media.get(fid) for fid in unique]
+
+
+@app.post("/api/files/bulk-download")
+async def bulk_download(request: Request):
+    try: payload = await request.json()
+    except (ValueError, UnicodeDecodeError): raise MediaError("The bulk download request is not valid JSON.")
+    items = _bulk_items(payload.get("ids") if isinstance(payload, dict) else None)
+    archive_path = os.path.join(media.TMP, "audio-studio-files-%s.zip" % secrets.token_hex(5))
+    used = set()
+    try:
+        # Media is already compressed; storing it avoids a long, wasteful recompression step.
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+            for item in items:
+                base = media.clean_name(item["name"], "file")
+                candidate = "%s.%s" % (base, item["ext"])
+                number = 2
+                while candidate.lower() in used:
+                    candidate = "%s (%d).%s" % (base, number, item["ext"]); number += 1
+                used.add(candidate.lower())
+                archive.write(media.path_of(item), candidate)
+    except Exception:
+        try: os.remove(archive_path)
+        except OSError: pass
+        raise
+    return FileResponse(archive_path, filename="Audio Studio selected files.zip", media_type="application/zip",
+                        background=BackgroundTask(lambda: os.path.isfile(archive_path) and os.remove(archive_path)))
+
+
+@app.post("/api/files/bulk-delete")
+async def bulk_delete(request: Request):
+    try: payload = await request.json()
+    except (ValueError, UnicodeDecodeError): raise MediaError("The bulk delete request is not valid JSON.")
+    items = _bulk_items(payload.get("ids") if isinstance(payload, dict) else None)
+    for item in items:
+        media.delete(item["id"])
+        projects.remove(item["id"])
+    return {"deleted": [item["id"] for item in items], "count": len(items)}
 
 
 @app.post("/api/record")
