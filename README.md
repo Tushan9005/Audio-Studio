@@ -59,6 +59,9 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
 Listens on 127.0.0.1 only and refuses requests from other web pages (Host/Origin check).
 ffmpeg is always run with an argument list, never a shell. Uploads up to 2 GB per file.
 
+## Development credits
+Audio Studio has been developed collaboratively with assistance from Codex and Claude.
+
 ## Code
 `app/server.py` (web API), `app/ops.py` (all tools), `app/media.py` (library + ffmpeg runner),
 `static/` (the page; wavesurfer is vendored in `static/vendor/`).
