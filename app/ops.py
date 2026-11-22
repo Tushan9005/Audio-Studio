@@ -690,10 +690,79 @@ def analyse_chords(fid, accurate=False, progress=lambda _x: None, stage=lambda _
             if correlation > best:
                 best, key = correlation, "%s %s" % (_KEYS[root], mode)
     progress(1.0)
-    return {"duration": round(duration, 2), "bpm": round(tempo, 1), "key": key,
-            "common_chords": common, "segments": segments, "method": method,
-            "overall_confidence": round(confidence_seconds / max(.001, sounding_seconds), 2),
-            "tuning_cents": round(tuning * 100, 1)}
+    # Structural boundaries from large chroma changes, kept far enough apart to
+    # produce useful practice sections rather than a marker at every chord.
+    section_points = [0.0]
+    if len(beat_frames) >= 24:
+        beat_chroma = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+        novelty = np.linalg.norm(np.diff(beat_chroma, axis=1), axis=0)
+        wanted = max(1, min(7, int(round(duration / 32.0)) - 1))
+        chosen = []
+        for candidate in np.argsort(novelty)[::-1]:
+            if candidate < 12 or candidate > len(beat_frames) - 12:
+                continue
+            if all(abs(int(candidate) - old) >= 16 for old in chosen):
+                chosen.append(int(candidate))
+                if len(chosen) >= wanted:
+                    break
+        section_points += sorted(float(librosa.frames_to_time(beat_frames[p], sr=sr, hop_length=hop)) for p in chosen)
+    section_points.append(duration)
+    sections, section_vectors, section_names = [], [], []
+    for number, (start, end) in enumerate(zip(section_points[:-1], section_points[1:])):
+        a = max(0, int(start * sr / hop)); b = min(chroma.shape[1], max(a + 1, int(end * sr / hop)))
+        vector = chroma[:, a:b].mean(axis=1); vector /= np.linalg.norm(vector) + 1e-9
+        repeat = next((i for i, old in enumerate(section_vectors) if float(np.dot(vector, old)) > .965), None)
+        if repeat is None:
+            letter = sum(1 for name in section_names if name.startswith("Section "))
+            label = "Intro" if number == 0 and end <= 18 else "Section %s" % chr(65 + letter)
+            section_vectors.append(vector); section_names.append(label)
+        else:
+            label = section_names[repeat]
+        sections.append({"start": round(start, 2), "end": round(end, 2), "label": label})
+
+    # Average onset positions within a 4/4 bar. Audio alone cannot reliably
+    # distinguish downstrokes from upstrokes, so report rhythm hits honestly.
+    rhythm = None
+    if len(beat_frames) >= 12 and tempo > 0:
+        onset_env = librosa.onset.onset_strength(y=harmonic, sr=sr, hop_length=hop)
+        onset_frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, hop_length=hop, backtrack=True)
+        slots = np.zeros(8); counts = np.zeros(8)
+        for frame in onset_frames:
+            pos = int(np.searchsorted(beat_frames, frame) - 1)
+            if pos < 0 or pos + 1 >= len(beat_frames):
+                continue
+            span = max(1, beat_frames[pos + 1] - beat_frames[pos])
+            half = 1 if (frame - beat_frames[pos]) / span >= .5 else 0
+            slot = (pos % 4) * 2 + half
+            slots[slot] += float(onset_env[min(int(frame), len(onset_env) - 1)]); counts[slot] += 1
+        strength = slots / np.maximum(1, counts)
+        if strength.max() > 0:
+            threshold = max(float(np.percentile(strength[strength > 0], 35)), float(strength.max()) * .28)
+            rhythm = " ".join("X" if value >= threshold else "-" for value in strength)
+
+    report = {"duration": round(duration, 2), "bpm": round(tempo, 1), "key": key,
+              "common_chords": common, "segments": segments, "sections": sections, "method": method,
+              "overall_confidence": round(confidence_seconds / max(.001, sounding_seconds), 2),
+              "tuning_cents": round(tuning * 100, 1), "rhythm_pattern": rhythm}
+    if accurate:
+        # Cross-check the isolated-guitar result against an independent full-mix
+        # pass. Agreement is a more honest reliability signal than template
+        # confidence alone.
+        mix_report = analyse_chords(fid, False, lambda _value: None, lambda _message: None)
+        agreed = total = 0.0
+        mix_segments = mix_report["segments"]
+        for row in segments:
+            if row["chord"] == "N.C.":
+                continue
+            midpoint = (row["start"] + row["end"]) / 2
+            other = next((candidate for candidate in mix_segments if candidate["start"] <= midpoint < candidate["end"]), None)
+            seconds = row["end"] - row["start"]
+            total += seconds
+            if other and other["chord"] == row["chord"]:
+                agreed += seconds
+        report["cross_check_agreement"] = round(agreed / max(.001, total), 2)
+        report["mix_key"] = mix_report["key"]
+    return report
 
 
 def best_part(fid, length):

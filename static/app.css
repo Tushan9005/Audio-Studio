@@ -242,6 +242,15 @@ input[type=range] { accent-color: var(--glow); width: 100%; margin: 6px 0; curso
 #soundCheckResults p { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
 #soundCheckResults ul { margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); }
 #soundCheckResults li + li { margin-top: 4px; }
+.practice-coach { margin-top: 0; }
+.coach-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.coach-stats { display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 8px; }
+.coach-stats > div { padding: 10px 12px; border: 1px solid var(--wire); border-radius: var(--r-md); background: var(--inset); }
+.coach-stats span { display: block; color: var(--ink-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; }
+.coach-stats b { display: block; margin-top: 4px; color: var(--ink); font: 650 19px var(--mono); }
+.practice-history { color: var(--ink-3); font-size: 12px; }
+.practice-history ol { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; padding: 0; list-style: none; }
+.practice-history li { padding: 6px 9px; border-radius: var(--r-sm); background: var(--rack-hi); }
 .chord-card { margin-bottom: 12px; }
 .chord-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .chord-head > div { max-width: 720px; }
@@ -250,6 +259,8 @@ input[type=range] { accent-color: var(--glow); width: 100%; margin: 6px 0; curso
 .chord-analyse-actions label { white-space: nowrap; }
 .chord-analyse-actions small { color: var(--ink-4); font-size: 10px; }
 .chord-tools { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; padding: 9px 10px; border: 1px solid var(--wire); border-radius: var(--r-md); background: var(--inset); }
+.chord-view { flex-direction: row; align-items: center; gap: 7px; }
+.chord-view select { height: 30px; }
 .transpose-control { display: flex; align-items: center; gap: 6px; }
 .transpose-control > span { color: var(--ink-3); font-size: 12px; }
 .transpose-control output { min-width: 104px; text-align: center; color: var(--ink); font: 600 12px var(--mono); }
@@ -265,6 +276,12 @@ input[type=range] { accent-color: var(--glow); width: 100%; margin: 6px 0; curso
 .chord-recommendation b { color: #c9f0d6; }
 .chord-recommendation.warn { border-left-color: var(--glow); background: var(--glow-wash); }
 .chord-recommendation.warn b { color: var(--glow-hi); }
+.section-strip { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 3px; }
+.section-strip button { flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--wire-2); border-radius: var(--r-sm); background: var(--inset); color: var(--ink-2); cursor: pointer; font: 600 11px var(--sans); }
+.section-strip button:hover { border-color: var(--glow); color: var(--ink); }
+.section-strip small { display: block; margin-top: 3px; color: var(--ink-4); font: 10px var(--mono); }
+.scale-guide { padding: 11px 13px; border: 1px solid var(--wire); border-radius: var(--r-md); background: var(--inset); color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.scale-guide b { color: var(--cue); }
 .chord-pill { display: inline-flex; align-items: center; min-width: 34px; justify-content: center; padding: 4px 8px; border: 1px solid var(--glow-line); border-radius: 99px; background: var(--glow-wash); color: var(--glow-hi); font: 650 13px var(--mono); }
 .chord-timeline { display: flex; align-items: stretch; gap: 3px; overflow-x: auto; padding: 4px 0 8px; }
 .chord-segment { flex: 0 0 auto; min-width: 62px; height: 58px; padding: 7px 9px; border: 1px solid var(--wire-2); border-radius: var(--r-sm); background: var(--inset); color: var(--ink); text-align: left; cursor: pointer; }
@@ -315,6 +332,7 @@ input[type=range] { accent-color: var(--glow); width: 100%; margin: 6px 0; curso
 @media (max-width: 560px) { .trim-counters { grid-template-columns: 1fr; } .counter b { font-size: 22px; } .exact { margin-left: 0; } .fx-command-copy, .fx-command-presets { display: none; } }
 @media (max-width: 560px) { .chord-head { align-items: stretch; flex-direction: column; } }
 @media (max-width: 640px) { .chord-tracker { grid-template-columns: 1fr 1fr; gap: 10px 16px; } .tracker-change { grid-column: 1 / -1; grid-row: 2; } .tracker-now b { font-size: 32px; } .chord-tools { align-items: stretch; flex-direction: column; } .transpose-control { justify-content: space-between; } }
+@media (max-width: 640px) { .coach-stats { grid-template-columns: 1fr 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 label.btn { flex-direction: row; color: inherit; font-size: 13.5px; }
 label.btn.primary { color: var(--glow-ink); }

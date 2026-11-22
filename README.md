@@ -50,10 +50,15 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   next chord and time remaining until the change. Chord controls can reduce names to basic major/minor shapes,
   transpose every chord, or find the easiest open-chord key with a capo recommendation. Results include an
   automatic original-vs-capo recommendation and confidence level. Optional accurate analysis uses Demucs to
-  isolate the guitar from vocals before detecting chords (slower). Chords remain computer estimates; unusual
+  isolate the guitar from vocals before detecting chords (slower), then cross-checks the result against the full
+  mix and reports agreement. Chords remain computer estimates; unusual
   voicings or a quiet guitar can affect them. The live tracker includes current/next chord diagrams; timeline
   chords can be corrected and those corrections persist in the browser. “Loop hardest change” selects the most
-  demanding transition as an A–B practice loop. Only download content you have permission to use.
+  demanding transition as an A–B practice loop. Detected sections, Roman-numeral and Nashville views, pentatonic
+  scale guidance, and a printable/PDF chord sheet support learning and sharing.
+- **Practice coach:** four-beat count-in, tempo-aware metronome, and optional microphone chord matching while the
+  backing track plays. It saves recent per-song practice duration and chord accuracy in the browser. Use headphones
+  to prevent the backing track from being mistaken for the guitar. Only download content you have permission to use.
 
 ## Safety
 Listens on 127.0.0.1 only and refuses requests from other web pages (Host/Origin check).
