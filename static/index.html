@@ -28,6 +28,7 @@
       <div><input id="socialUrl" type="url" inputmode="url" autocomplete="off" placeholder="Paste Instagram, Facebook or YouTube link" required><button class="btn" id="linkImportBtn" type="submit">Get audio &amp; find chords</button></div>
       <p>Public videos only. Use content you have permission to download.</p>
     </form>
+    <label class="btn project-import" for="projectImport">Restore project backup</label><input id="projectImport" type="file" accept=".zip,application/zip" hidden>
     <div class="drop" id="drop">or drop songs, videos and photos here</div>
     <div class="lib-head"><span>Library</span><span id="libCount"></span></div>
     <div class="chips" role="group" aria-label="Show">
@@ -53,6 +54,7 @@
         <input class="fname" id="fname" aria-label="File name">
         <span class="meta" id="fmeta"></span>
         <a class="btn small" id="dl" href="#"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v10M5.5 9.5 10 14l4.5-4.5M4 17h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Download</a>
+        <a class="btn small" id="projectExport" href="#">Project backup</a>
         <button class="btn small ghost danger" id="del" type="button">Delete</button>
       </div>
       <div class="player">
@@ -167,9 +169,10 @@
             <button class="btn primary" id="splitBtn" type="button">Split song</button>
           </div>
           <div class="card wide practice-coach" id="practiceCoach">
-            <div class="coach-head"><div><h3>Practice coach</h3><p class="note">Use headphones so the microphone hears your guitar rather than the backing track.</p></div><div class="row"><button class="btn" id="countInBtn" type="button">4-beat count-in</button><button class="btn" id="metronomeBtn" type="button" aria-pressed="false">Metronome</button><button class="btn primary" id="coachMicBtn" type="button">Listen to my guitar</button></div></div>
+            <div class="coach-head"><div><h3>Practice coach</h3><p class="note">Use headphones so the microphone hears your guitar rather than the backing track.</p></div><div class="row"><button class="btn" id="countInBtn" type="button">4-beat count-in</button><button class="btn" id="metronomeBtn" type="button" aria-pressed="false">Metronome</button><button class="btn" id="smartPracticeBtn" type="button">Smart practice</button><button class="btn primary" id="coachMicBtn" type="button">Listen to my guitar</button><button class="btn" id="performanceBtn" type="button">Record performance</button></div></div>
             <div class="coach-stats"><div><span>Expected</span><b id="coachExpected">–</b></div><div><span>Heard</span><b id="coachHeard">–</b></div><div><span>Chord accuracy</span><b id="coachScore">–</b></div><div><span>Session</span><b id="coachTime">0:00</b></div></div>
             <div id="practiceHistory" class="practice-history"></div>
+            <div class="practice-goals"><label>Daily minutes <input id="goalMinutes" type="number" min="5" max="180" value="15"></label><label>Target accuracy <input id="goalAccuracy" type="number" min="50" max="100" value="85"></label><button class="btn small" id="saveGoals" type="button">Save goals</button><span id="goalProgress"></span></div>
           </div>
         </div>
       </div>
@@ -375,6 +378,7 @@
             <button class="btn small" id="chordHard" type="button">Loop hardest change</button>
             <button class="btn small ghost" id="chordReset" type="button">Original</button>
             <button class="btn small ghost" id="chordPrint" type="button">Print / Save PDF</button>
+            <button class="btn small ghost" id="chordVideo" type="button">Make practice video</button>
             <span class="capo-note" id="chordCapo">No capo</span>
           </div>
           <div class="chord-editor" id="chordEditor" hidden>
@@ -387,6 +391,11 @@
           <div id="chordResults" aria-live="polite"><p class="chord-empty">Import a link above or analyse the selected file.</p></div>
           <div class="scale-guide" id="scaleGuide" hidden></div>
         </div>
+        <div class="card wide lyrics-card">
+          <div class="row"><div><h3>Lyrics with chords</h3><p class="note">Transcribes locally. The base model downloads once on first use.</p></div><button class="btn" id="lyricsBtn" type="button">Transcribe lyrics</button></div>
+          <div id="lyricsResults" class="lyrics-results"></div>
+        </div>
+        <div class="card wide setup-card"><div class="row"><div><h3>Setup checker</h3><p class="note">Checks required tools, optional lyrics support and free disk space.</p></div><button class="btn" id="setupCheckBtn" type="button">Run setup check</button></div><div id="setupResults"></div></div>
         <div class="card personal-presets">
           <h3>Recording health &amp; improvement suggestions</h3>
           <p class="note">Checks the first two minutes for level, possible clipping, dynamics, tonal balance and stereo cancellation. Suggestions are starting points, not a verdict on your singing or whether harmonies fit the chords. Noise, reverb quality and tuning are not judged.</p>

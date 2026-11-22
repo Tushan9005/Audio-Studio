@@ -57,8 +57,15 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   demanding transition as an A–B practice loop. Detected sections, Roman-numeral and Nashville views, pentatonic
   scale guidance, and a printable/PDF chord sheet support learning and sharing.
 - **Practice coach:** four-beat count-in, tempo-aware metronome, and optional microphone chord matching while the
-  backing track plays. It saves recent per-song practice duration and chord accuracy in the browser. Use headphones
+  backing track plays. Smart practice loops the hardest change, starts at 60% speed and raises the speed as accuracy
+  improves. Record a performance for a time-aligned comparison, set daily practice goals, and review recent results. Use headphones
   to prevent the backing track from being mistaken for the guitar. Only download content you have permission to use.
+- **Song projects:** analyses are cached so reopening a song is immediate. Chord corrections, display choices,
+  section names, goals and locally transcribed lyrics are saved per song. Export a portable project ZIP (audio plus
+  project data) and restore it later. A setup checker reports whether the optional tools are ready.
+- **Learning and sharing:** rename detected sections, inspect disagreements between isolated-guitar and full-mix
+  analysis, see easier partial chord voicings, and export a 720p practice video with timed current/next chords.
+  Offline lyrics use faster-whisper and align each line with its chord; the base model downloads once on first use.
 
 ## Safety
 Listens on 127.0.0.1 only and refuses requests from other web pages (Host/Origin check).

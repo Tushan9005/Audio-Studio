@@ -69,3 +69,4 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.34.0
 yt-dlp==2026.10.26
+faster-whisper==1.2.1

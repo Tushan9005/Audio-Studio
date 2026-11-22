@@ -13,6 +13,8 @@ from .media import FILES, TMP, MediaError, delete, get, new_path, path_of, regis
 
 SR = 44100
 WAV = ["-ar", str(SR), "-ac", "2", "-c:a", "pcm_s16le"]
+_WHISPER_MODELS = {}
+_WHISPER_LOCK = threading.Lock()
 
 
 # ── checks for values coming from the page ──
@@ -750,6 +752,7 @@ def analyse_chords(fid, accurate=False, progress=lambda _x: None, stage=lambda _
         # confidence alone.
         mix_report = analyse_chords(fid, False, lambda _value: None, lambda _message: None)
         agreed = total = 0.0
+        disagreements = []
         mix_segments = mix_report["segments"]
         for row in segments:
             if row["chord"] == "N.C.":
@@ -760,9 +763,122 @@ def analyse_chords(fid, accurate=False, progress=lambda _x: None, stage=lambda _
             total += seconds
             if other and other["chord"] == row["chord"]:
                 agreed += seconds
+            elif other:
+                disagreements.append({"start": row["start"], "isolated": row["chord"], "full_mix": other["chord"]})
         report["cross_check_agreement"] = round(agreed / max(.001, total), 2)
         report["mix_key"] = mix_report["key"]
+        report["disagreements"] = disagreements[:40]
     return report
+
+
+def transcribe_lyrics(fid, progress=lambda _x: None, stage=lambda _s: None):
+    """Offline word-timestamp transcription using faster-whisper (model cached after first use)."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise MediaError("Offline lyrics need faster-whisper. Reinstall requirements, then restart Audio Studio.")
+    item = need(get(fid), "audio", "video")
+    decoded = os.path.join(TMP, "lyrics-%s.wav" % secrets.token_hex(4))
+    try:
+        stage("Preparing speech audio")
+        run(["-i", path_of(item), "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", decoded])
+        progress(.08); stage("Transcribing lyrics locally")
+        with _WHISPER_LOCK:
+            model = _WHISPER_MODELS.get("base")
+            if model is None:
+                model = _WHISPER_MODELS["base"] = WhisperModel("base", device="cpu", compute_type="int8")
+        stream, info = model.transcribe(decoded, beam_size=5, vad_filter=True, word_timestamps=True)
+        rows = []
+        for number, segment in enumerate(stream):
+            rows.append({"start": round(segment.start, 2), "end": round(segment.end, 2), "text": segment.text.strip(),
+                         "words": [{"start": round(word.start, 2), "end": round(word.end, 2), "text": word.word}
+                                   for word in (segment.words or [])]})
+            progress(min(.95, .1 + .85 * (segment.end / max(1, item["duration"]))))
+        progress(1.0)
+        return {"language": info.language, "probability": round(info.language_probability, 3), "segments": rows}
+    finally:
+        try: os.remove(decoded)
+        except OSError: pass
+
+
+def compare_chord_reports(reference, performance, offset=0):
+    """Time-aligned chord agreement for a performance recorded with the backing track."""
+    agreed = total = 0.0
+    offset = num(offset, 0, max(0, reference.get("duration", 0)), 0)
+    performance_end = offset + performance.get("duration", 0)
+    misses = []
+    for expected in reference.get("segments", []):
+        if expected["chord"] == "N.C.":
+            continue
+        if expected["end"] <= offset or expected["start"] >= performance_end:
+            continue
+        midpoint = (expected["start"] + expected["end"]) / 2
+        heard_time = midpoint - offset
+        heard = next((row for row in performance.get("segments", []) if row["start"] <= heard_time < row["end"]), None)
+        seconds = expected["end"] - expected["start"]; total += seconds
+        if heard and heard["chord"] == expected["chord"]:
+            agreed += seconds
+        else:
+            misses.append({"start": expected["start"], "expected": expected["chord"], "heard": heard["chord"] if heard else "N.C."})
+    return {"accuracy": round(agreed / max(.001, total), 3), "misses": misses[:30]}
+
+
+def chord_practice_video(fid, report, transpose=0, simple=False):
+    """Render a 720p practice video with timed current/next chord overlays."""
+    item = need(get(fid), "audio", "video")
+    segments = [row for row in (report or {}).get("segments", []) if row.get("end", 0) > row.get("start", 0)]
+    if not segments:
+        raise MediaError("Analyse the chords before making a practice video.")
+    shift = int(num(transpose, -11, 11, 0))
+    keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+    def shown(chord):
+        if chord == "N.C.": return chord
+        import re
+        match = re.match(r"^([A-G])([#b]?)(.*)$", chord or "")
+        if not match: return chord or "N.C."
+        root = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}.get(match.group(1) + match.group(2), match.group(1) + match.group(2))
+        suffix = match.group(3)
+        if simple: suffix = "m" if suffix.startswith("m") and not suffix.startswith("maj") else ""
+        return keys[(keys.index(root) + shift) % 12] + suffix
+
+    def ass_time(seconds):
+        value = max(0.0, float(seconds)); hours = int(value // 3600); value %= 3600
+        return "%d:%02d:%05.2f" % (hours, int(value // 60), value % 60)
+
+    subtitle = os.path.join(TMP, "chords-%s.ass" % secrets.token_hex(5))
+    fid_out, out = new_path("mp4")
+    header = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Style: Chord,Arial,92,&H00FFFFFF,&H000000FF,&H00110B05,&H90000000,-1,0,0,0,100,100,1,0,1,5,2,2,30,30,88,1
+Style: Next,Arial,30,&H00B9B0A5,&H000000FF,&H00110B05,&H70000000,0,0,0,0,100,100,0,0,1,3,1,2,30,30,38,1
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+"""
+    events = []
+    for index, row in enumerate(segments):
+        current = shown(row.get("chord")); upcoming = shown(segments[index + 1].get("chord")) if index + 1 < len(segments) else "End"
+        start, end = ass_time(row["start"]), ass_time(row["end"])
+        events.append("Dialogue: 0,%s,%s,Chord,,0,0,0,,%s" % (start, end, current.replace(",", "")))
+        events.append("Dialogue: 0,%s,%s,Next,,0,0,0,,Next: %s" % (start, end, upcoming.replace(",", "")))
+    try:
+        with open(subtitle, "w", encoding="utf-8-sig") as handle: handle.write(header + "\n".join(events))
+        escaped = subtitle.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+        vf = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x0b0907,ass='%s'" % escaped
+        if item["kind"] == "video":
+            args = ["-i", path_of(item), "-vf", vf, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+        else:
+            args = ["-f", "lavfi", "-i", "color=c=0x0b0907:s=1280x720:r=30:d=%.3f" % item["duration"], "-i", path_of(item), "-vf", vf,
+                    "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
+        run(args + ["-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out])
+        return register(fid_out, "mp4", _name(item, "chord practice video"), op="chord_video", parent=item["id"])
+    finally:
+        try: os.remove(subtitle)
+        except OSError: pass
 
 
 def best_part(fid, length):

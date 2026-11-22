@@ -1,12 +1,13 @@
 """Audio Studio: a small local web app (http://127.0.0.1:8765), only reachable from this PC."""
-import os, secrets, shutil, threading, time
+import importlib.util, os, secrets, shutil, threading, time
 
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import media, ops, tune, social
+from . import media, ops, tune, social, projects
 from .media import MediaError
 
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -97,6 +98,7 @@ async def rename(fid: str, request: Request):
 @app.delete("/api/files/{fid}")
 def remove(fid: str):
     media.delete(fid)
+    projects.remove(fid)
     return {"ok": True}
 
 
@@ -110,6 +112,62 @@ def stream(fid: str):
 def download(fid: str):
     it = media.get(fid)
     return FileResponse(media.path_of(it), filename="%s.%s" % (it["name"], it["ext"]))
+
+
+@app.get("/api/projects/{fid}")
+def project_get(fid: str):
+    media.get(fid)
+    return {"project": projects.get(fid)}
+
+
+@app.post("/api/projects/{fid}")
+async def project_save(fid: str, request: Request):
+    return {"project": projects.save(fid, await request.json())}
+
+
+@app.get("/api/projects/{fid}/export")
+def project_export(fid: str):
+    item = media.get(fid)
+    path = os.path.join(media.TMP, "project-%s.zip" % secrets.token_hex(5))
+    projects.export_archive(fid, path)
+    return FileResponse(path, filename="%s.audio-studio.zip" % media.clean_name(item["name"]),
+                        background=BackgroundTask(lambda: os.path.isfile(path) and os.remove(path)))
+
+
+@app.post("/api/project-import")
+async def project_import(file: UploadFile = File(...)):
+    path = os.path.join(media.TMP, "project-upload-%s.zip" % secrets.token_hex(5))
+    try:
+        with open(path, "wb") as handle:
+            size = 0
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk: break
+                size += len(chunk)
+                if size > MAX_UPLOAD:
+                    raise MediaError("That project archive is bigger than 2 GB.")
+                handle.write(chunk)
+        item, project = projects.import_archive(path)
+        return {"file": item, "project": project}
+    finally:
+        try: os.remove(path)
+        except OSError: pass
+
+
+@app.get("/api/setup-check")
+def setup_check():
+    usage = shutil.disk_usage(media.WS)
+    demucs_cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub", "models--adefossez--HTDemucs-6s")
+    checks = [
+        {"name": "FFmpeg", "ok": os.path.isfile(media.FFMPEG), "detail": media.FFMPEG},
+        {"name": "Song separation", "ok": importlib.util.find_spec("demucs") is not None,
+         "detail": "model ready" if os.path.isdir(demucs_cache) else "model downloads on first use"},
+        {"name": "Social links", "ok": importlib.util.find_spec("yt_dlp") is not None, "detail": "yt-dlp"},
+        {"name": "Offline lyrics", "ok": importlib.util.find_spec("faster_whisper") is not None,
+         "detail": "faster-whisper" if importlib.util.find_spec("faster_whisper") else "optional dependency not installed"},
+        {"name": "Free disk space", "ok": usage.free >= 2 * 1024 ** 3, "detail": "%.1f GB free" % (usage.free / 1024 ** 3)},
+    ]
+    return {"checks": checks, "ready": all(check["ok"] for check in checks if check["name"] != "Offline lyrics")}
 
 
 def _tune_params(q):
@@ -161,7 +219,8 @@ LABELS = {"trim": "Keep only this part", "cut": "Remove a part", "fade": "Fades"
           "beat_reel": "Beat reel", "practice": "Practice copy", "voice": "Voiceover", "vocal_layers": "Vocal layers mix",
           "tune": "Save tuned version", "analyse": "Tempo & key", "sound_check": "Sound check",
           "split": "Split song", "tune_prepare": "Analyse singing", "chords": "Guitar chord analysis",
-          "link_import": "Import audio & analyse link"}
+          "link_import": "Import audio & analyse link", "lyrics": "Offline lyrics", "compare": "Compare performance",
+          "chord_video": "Chord practice video"}
 
 
 @app.post("/api/import-link")
@@ -171,6 +230,7 @@ async def import_link(request: Request):
     def run(progress, stage):
         item = social.import_audio(url, progress, stage)
         report = ops.analyse_chords(item["id"], False, lambda value: progress(.48 + value * .52), stage)
+        projects.store_analysis(item["id"], False, report)
         return {"file": item, "chords": report}
     return {"job": _start_job(run, "link_import")}
 
@@ -198,14 +258,37 @@ async def do(action: str, request: Request):
         "practice": lambda: ops.practice_copy(f, p.get("rate"), p.get("start"), p.get("end")),
         "voice": lambda: ops.voiceover(p.get("text"), p.get("voice"), p.get("speed"), p.get("music") or None, p.get("music_db"), p.get("music_from")),
     }
-    if action not in acts and action not in ("analyse", "chords", "tune", "sound_check"):
+    if action not in acts and action not in ("analyse", "chords", "lyrics", "compare", "chord_video", "tune", "sound_check"):
         raise MediaError("Unknown tool.")
 
     def run(progress, stage):
         if action == "analyse":
             return {"analysis": ops.analyse(f)}
         if action == "chords":
-            return {"chords": ops.analyse_chords(f, bool(p.get("accurate")), progress, stage)}
+            accurate = bool(p.get("accurate"))
+            cached = None if p.get("force") else projects.cached_analysis(f, accurate)
+            report = cached or ops.analyse_chords(f, accurate, progress, stage)
+            if not cached:
+                projects.store_analysis(f, accurate, report)
+            return {"chords": report, "cached": bool(cached)}
+        if action == "lyrics":
+            cached = projects.get(f).get("lyrics") if not p.get("force") else None
+            lyrics = cached or ops.transcribe_lyrics(f, progress, stage)
+            if not cached:
+                projects.save(f, {"lyrics": lyrics})
+            return {"lyrics": lyrics, "cached": bool(cached)}
+        if action == "compare":
+            performance_id = p.get("performance")
+            media.get(performance_id)
+            reference = projects.cached_analysis(f, False) or ops.analyse_chords(f, False, lambda value: progress(value * .4), stage)
+            performance = ops.analyse_chords(performance_id, False, lambda value: progress(.4 + value * .6), stage)
+            return {"comparison": ops.compare_chord_reports(reference, performance, p.get("offset")), "performance": performance_id}
+        if action == "chord_video":
+            report = p.get("report") if isinstance(p.get("report"), dict) else None
+            report = report or projects.cached_analysis(f, bool(p.get("accurate"))) or projects.cached_analysis(f, False)
+            if not report:
+                raise MediaError("Analyse the chords before making a practice video.")
+            return {"file": ops.chord_practice_video(f, report, p.get("transpose"), bool(p.get("simple")))}
         if action == "sound_check":
             return {"sound_check": ops.sound_check(f)}
         if action == "tune":

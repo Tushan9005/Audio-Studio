@@ -7,7 +7,7 @@
   var TS = { infos: {}, keyFor: null, key: 'C', scale: 'major', strength: 100, style: 0, ref: 'guitar', scales: null, voices: null, summary: null };
   var NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   function nice(n) { return String(n).replace('#', '♯'); }
-  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, chords: {}, chordPrefs: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
+  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, chords: {}, chordPrefs: {}, projects: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
   var fxAudioContext = null, fxSources = new WeakMap(), fxRebuildTimer = null;
   var trackerIndex = -1;
   var chordEditIndex = -1;
@@ -45,6 +45,23 @@
   function post(url, body) { return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   function curFile() { return S.files.filter(function (f) { return f.id === S.cur; })[0] || null; }
   function byId(id) { return S.files.filter(function (f) { return f.id === id; })[0]; }
+  function syncProject() {
+    if (!S.cur) return Promise.resolve();
+    var corrections = correctionStore()[S.cur] || {}, goals = goalStore()[S.cur] || {};
+    return post('/api/projects/' + S.cur, { ui: { chord_prefs: chordPrefs(), corrections: corrections, goals: goals } }).catch(function () {});
+  }
+  function loadProject(fid) {
+    return api('/api/projects/' + fid).then(function (value) {
+      var project = S.projects[fid] = value.project || {}, ui = project.ui || {};
+      if (ui.chord_prefs) S.chordPrefs[fid] = ui.chord_prefs;
+      if (ui.corrections) { var all = correctionStore(); all[fid] = ui.corrections; try { localStorage.setItem('audioStudioChordCorrections', JSON.stringify(all)); } catch (e) {} }
+      if (ui.goals) { var goals = goalStore(); goals[fid] = ui.goals; try { localStorage.setItem('audioStudioPracticeGoals', JSON.stringify(goals)); } catch (e) {} renderGoals(); }
+      var cached = project.analysis_accurate || project.analysis_fast;
+      if (cached && cached.report) { if (project.section_names) (cached.report.sections || []).forEach(function (section) { if (project.section_names[Number(section.start).toFixed(2)]) section.label = project.section_names[Number(section.start).toFixed(2)]; }); S.chords[fid] = cached.report; if (S.cur === fid) showChordReport(cached.report, true); }
+      if (project.lyrics && S.cur === fid) showLyrics(project.lyrics);
+      return project;
+    }).catch(function () { return {}; });
+  }
   function chordPrefs() { return S.chordPrefs[S.cur] || (S.chordPrefs[S.cur] = { shift: 0, simple: false, notation: 'chords' }); }
   function transposeRoot(root, shift) {
     var flats = { Db: 1, Eb: 3, Gb: 6, Ab: 8, Bb: 10 }, pc = NOTE_NAMES.indexOf(root);
@@ -78,6 +95,11 @@
     var flats = { Db:1, Eb:3, Gb:6, Ab:8, Bb:10 }, root = NOTE_NAMES.indexOf(match[1]); if (root < 0) root = flats[match[1]];
     var offsets = match[2] === 'minor' ? [0,3,5,7,10] : [0,2,4,7,9];
     return '<b>' + esc(nice(match[1] + ' ' + match[2] + ' pentatonic')) + '</b>: ' + offsets.map(function (offset) { return nice(NOTE_NAMES[(root + offset) % 12]); }).join(' \u00b7 ') + '. A safe starting scale for improvising over this key; listen when borrowed chords appear.';
+  }
+  function alternativeGuide(report) {
+    var alternatives = { F:'mini F (xx3211)', Bm:'small Bm (xx4432)', B:'small B (xx4442)', 'F#m':'small F\u266fm (xx4222)', 'G#m':'small G\u266fm (xx6444)', 'C#m':'small C\u266fm (xx6654)', 'D#m':'small D\u266fm (xx8876)' }, found = [];
+    (report.common_chords || []).forEach(function (chord) { var shown = basicChordName(displayChord(chord)); if (alternatives[shown] && found.indexOf(alternatives[shown]) < 0) found.push(alternatives[shown]); });
+    return found.length ? ' Easier partial voicings: <b>' + esc(found.join(' · ')) + '</b>.' : '';
   }
   function basicChordName(chord) {
     var match = /^([A-G](?:#|b)?)(.*)$/.exec(chord || '');
@@ -327,6 +349,12 @@
     $('up').value = '';
   }
   $('up').addEventListener('change', function () { upload(this.files); });
+  $('projectImport').addEventListener('change', function () {
+    if (!this.files.length) return; var fd = new FormData(); fd.append('file', this.files[0]);
+    fetch('/api/project-import', { method:'POST', body:fd }).then(function (response) { return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || 'Import failed'); return body; }); }).then(function (result) {
+      toast('Project restored.'); return load(result.file.id);
+    }).catch(function (error) { toast(error.message, true); }); this.value = '';
+  });
   ['dragenter', 'dragover'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); $('drop').classList.add('over'); }); });
   ['dragleave', 'drop'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || !e.relatedTarget) $('drop').classList.remove('over'); }); });
   document.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files.length) upload(e.dataTransfer.files); });
@@ -385,10 +413,11 @@
     S.cur = id; showStage(); drawList(); renderPracticeHistory();
     trackerIndex = -1;
     if (S.chords[id]) showChordReport(S.chords[id], true);
-    else { $('chordResults').innerHTML = '<p class="chord-empty">Import a link above or analyse the selected file.</p>'; $('chordTracker').hidden = true; $('scaleGuide').hidden = true; syncChordTools(false); }
+    else { $('chordResults').innerHTML = '<p class="chord-empty">Loading saved project or analyse the selected file.</p>'; $('chordTracker').hidden = true; $('scaleGuide').hidden = true; syncChordTools(false); loadProject(id); }
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
     $('dl').href = '/download/' + id;
+    $('projectExport').href = '/api/projects/' + id + '/export';
     if (S.ws) { S.ws.destroy(); S.ws = null; S.region = null; }
     var vid = $('vid'), img = $('img');
     vid.pause(); vid.hidden = f.kind !== 'video'; img.hidden = f.kind !== 'image';
@@ -540,7 +569,7 @@
 
   // Practice coach: count-in/metronome plus microphone chord matching. The
   // microphone stays in this browser; only aggregate session scores are saved.
-  var MET = { ctx: null, timer: null, on: false }, COACH = null;
+  var MET = { ctx: null, timer: null, on: false }, COACH = null, SMART = false, PERF = null;
   function effectiveBpm() { var report = S.chords[S.cur]; return Math.max(30, (report && report.bpm || 90) * S.rate); }
   function clickBeat(strong) {
     try {
@@ -567,9 +596,16 @@
     return (report.segments || []).filter(function (row) { return row.start <= time && time < row.end; })[0] || null;
   }
   function practiceHistory() { try { return JSON.parse(localStorage.getItem('audioStudioPracticeHistory') || '[]'); } catch (e) { return []; } }
+  function goalStore() { try { return JSON.parse(localStorage.getItem('audioStudioPracticeGoals') || '{}'); } catch (e) { return {}; } }
+  function renderGoals() {
+    var goals = goalStore()[S.cur] || { minutes:15, accuracy:85 }; $('goalMinutes').value = goals.minutes; $('goalAccuracy').value = goals.accuracy;
+    var today = new Date().toLocaleDateString(), rows = practiceHistory().filter(function (row) { return row.file === S.cur && row.date === today; });
+    var minutes = rows.reduce(function (sum, row) { return sum + row.seconds; }, 0) / 60, accuracy = rows.length ? rows.reduce(function (sum, row) { return sum + row.accuracy; }, 0) / rows.length : 0;
+    $('goalProgress').textContent = Math.round(minutes) + '/' + goals.minutes + ' min today' + (rows.length ? ' · ' + Math.round(accuracy) + '% avg' : '');
+  }
   function renderPracticeHistory() {
     var rows = practiceHistory().filter(function (row) { return !S.cur || row.file === S.cur; }).slice(-5).reverse();
-    $('practiceHistory').innerHTML = rows.length ? '<ol>' + rows.map(function (row) { return '<li>' + esc(row.date) + ' · ' + row.seconds + ' s · <b>' + row.accuracy + '%</b></li>'; }).join('') + '</ol>' : 'No scored practice sessions for this song yet.';
+    $('practiceHistory').innerHTML = rows.length ? '<ol>' + rows.map(function (row) { return '<li>' + esc(row.date) + ' · ' + row.seconds + ' s · <b>' + row.accuracy + '%</b></li>'; }).join('') + '</ol>' : 'No scored practice sessions for this song yet.'; renderGoals();
   }
   function stopCoach(save) {
     if (!COACH) return;
@@ -598,6 +634,10 @@
     $('coachExpected').textContent = expectedName ? nice(expectedName) : '–'; $('coachHeard').textContent = nice(heard);
     if (expectedName && heard !== 'Too quiet' && S.ws && S.ws.isPlaying()) { COACH.total++; if (heard === expectedName) COACH.correct++; }
     $('coachScore').textContent = COACH.total ? Math.round(COACH.correct / COACH.total * 100) + '%' : '–'; $('coachTime').textContent = fmt((Date.now()-COACH.started)/1000);
+    if (SMART && COACH.total && COACH.total % 24 === 0) {
+      var target = Number($('goalAccuracy').value) || 85, recent = COACH.correct / COACH.total * 100;
+      if (recent >= target && S.rate < 1) { S.rate = Math.min(1, S.rate + .05); applyRate(); toast('Great work — smart practice increased speed to ' + Math.round(S.rate*100) + '%.'); }
+    }
   }
   $('coachMicBtn').addEventListener('click', function () {
     if (COACH) { stopCoach(true); return; }
@@ -606,6 +646,36 @@
       var ctx = new (window.AudioContext || window.webkitAudioContext)(), analyser = ctx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = .72; ctx.createMediaStreamSource(stream).connect(analyser);
       COACH = { stream:stream, ctx:ctx, analyser:analyser, data:new Float32Array(analyser.frequencyBinCount), correct:0, total:0, started:Date.now() };
       $('coachMicBtn').textContent = 'Stop & save score'; $('coachMicBtn').classList.add('on'); COACH.timer = setInterval(detectMicChord, 250); detectMicChord();
+    }).catch(function (error) { toast('Microphone could not start: ' + error.message, true); });
+  });
+  $('saveGoals').addEventListener('click', function () {
+    var all = goalStore(); all[S.cur] = { minutes:Number($('goalMinutes').value)||15, accuracy:Number($('goalAccuracy').value)||85 };
+    try { localStorage.setItem('audioStudioPracticeGoals', JSON.stringify(all)); } catch (e) {} renderGoals(); syncProject(); toast('Practice goals saved.');
+  });
+  $('smartPracticeBtn').addEventListener('click', function () {
+    SMART = !SMART; this.classList.toggle('on', SMART); this.textContent = SMART ? 'Stop smart practice' : 'Smart practice';
+    if (!SMART) return;
+    if (!S.chords[S.cur]) { SMART = false; this.textContent = 'Smart practice'; toast('Analyse chords first.', true); return; }
+    $('chordHard').click(); S.rate = .6; applyRate(); $('prLoop').checked = true;
+    if (!COACH) $('coachMicBtn').click(); toast('Smart practice starts at 60% and raises speed after accurate playing.');
+  });
+
+  $('performanceBtn').addEventListener('click', function () {
+    var button = this;
+    if (PERF) { PERF.recorder.stop(); return; }
+    if (!S.ws || !S.chords[S.cur]) { toast('Analyse a song first.', true); return; }
+    navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false } }).then(function (stream) {
+      var reference = S.cur, chunks = [], recorder = new MediaRecorder(stream, MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? { mimeType:'audio/webm;codecs=opus', audioBitsPerSecond:192000 } : {});
+      var start = selected(), offset = start ? start.start : 0;
+      PERF = { recorder:recorder, stream:stream, reference:reference, offset:offset }; recorder.ondataavailable = function (event) { if (event.data.size) chunks.push(event.data); };
+      recorder.onstop = function () {
+        stream.getTracks().forEach(function (track) { track.stop(); }); button.textContent = 'Record performance'; var saved = PERF; PERF = null;
+        var fd = new FormData(); fd.append('file', new Blob(chunks, { type:recorder.mimeType }), 'performance.webm');
+        fetch('/api/record?name=Guitar performance', { method:'POST', body:fd }).then(function (response) { return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || 'Could not save performance.'); return body; }); }).then(function (result) {
+          return startJob('/api/do/compare', { id:saved.reference, performance:result.file.id, offset:saved.offset }, function (done) { var score = Math.round(done.comparison.accuracy*100); toast('Performance chord accuracy: ' + score + '%.'); load(result.file.id); });
+        }).catch(function (error) { toast(error.message || 'Could not save performance.', true); });
+      };
+      if (start) S.ws.setTime(start.start); else S.ws.setTime(0); recorder.start(); S.ws.play(); button.textContent = 'Stop & compare';
     }).catch(function (error) { toast('Microphone could not start: ' + error.message, true); });
   });
   renderPracticeHistory();
@@ -1370,7 +1440,7 @@
 
   // ── run a tool ──
   var MSG = { effects: 'Applying effects…', effects_video: 'Polishing the sound and rebuilding your video…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',
-              voice: 'Making the voiceover…', tune: 'Saving your tuned version…', vocal_layers: 'Mixing your vocal layers…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', chords: 'Listening for guitar chords…', best: 'Finding the best part…', export: 'Saving…' };
+              voice: 'Making the voiceover…', tune: 'Saving your tuned version…', vocal_layers: 'Mixing your vocal layers…', practice: 'Making your practice copy…', chord_video: 'Rendering your chord practice video…', analyse: 'Listening for tempo and key…', chords: 'Listening for guitar chords…', best: 'Finding the best part…', export: 'Saving…' };
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-do]'); if (!b || b.disabled) return;
     var a = b.getAttribute('data-do'), f = curFile();
@@ -1444,6 +1514,28 @@
       (adv ? '<p class="note" style="grid-column:1/-1">Loudness: ' + esc(adv) + '. Key is a computer estimate from the notes it hears; check it on your guitar.</p>' : '');
   }
 
+  function showLyrics(lyrics) {
+    if (!lyrics || !lyrics.segments) return;
+    var report = S.chords[S.cur];
+    $('lyricsResults').innerHTML = lyrics.segments.map(function (line) {
+      var row = report && (report.segments || []).filter(function (segment) { return segment.start <= line.start && line.start < segment.end; })[0];
+      return '<div class="lyric-line" data-lyric-time="' + line.start + '"><b>' + (row ? esc(nice(displayChord(row.chord))) : '') + '</b>' + esc(line.text) + '</div>';
+    }).join('') || '<p class="note">No clear sung words were found.</p>';
+  }
+  $('lyricsBtn').addEventListener('click', function () {
+    if (!S.cur) return; var fid = S.cur; this.disabled = true;
+    startJob('/api/do/lyrics', { id:fid }, function (result) { $('lyricsBtn').disabled = false; if (S.cur === fid) showLyrics(result.lyrics); }, function () { $('lyricsBtn').disabled = false; });
+    toast('Transcribing locally in the background. The first use downloads the model.');
+  });
+  $('lyricsResults').addEventListener('click', function (event) { var line = event.target.closest('[data-lyric-time]'); if (line && S.ws) { S.ws.setTime(Number(line.dataset.lyricTime)); S.ws.play(); } });
+  $('setupCheckBtn').addEventListener('click', function () {
+    api('/api/setup-check').then(function (result) { $('setupResults').innerHTML = result.checks.map(function (check) { return '<span class="setup-check ' + (check.ok ? 'ok' : '') + '">' + (check.ok ? '✓ ' : '! ') + esc(check.name) + ': ' + esc(check.detail) + '</span>'; }).join(''); });
+  });
+  $('chordVideo').addEventListener('click', function () {
+    if (!S.cur || !S.chords[S.cur]) { toast('Analyse the chords first.', true); return; }
+    runTool('chord_video', { id:S.cur, report:S.chords[S.cur], accurate:$('chordAccurate').checked, transpose:chordPrefs().shift, simple:$('chordSimple').checked });
+  });
+
   function showChordReport(report, startAtZero) {
     if (S.cur) S.chords[S.cur] = report;
     applyChordCorrections(report);
@@ -1461,6 +1553,7 @@
       ' Recommendation is based on the whole detected progression. ' + (confidence ? 'Detection confidence: ' + confidence + '%. ' : '') +
       (agreement != null ? 'Independent cross-check agreement: ' + agreement + '%. ' : '') +
       (report.method === 'isolated guitar' ? 'Vocals were separated for this analysis.' : 'Use “Isolate guitar” if vocals are masking chord changes.') + '</div>';
+    if ((report.disagreements || []).length) recommendation += '<details class="analysis-compare"><summary>Compare ' + report.disagreements.length + ' uncertain changes</summary>' + report.disagreements.map(function (row) { return '<button type="button" data-section-time="' + row.start + '">' + fmt(row.start) + ': isolated ' + esc(nice(row.isolated)) + ' · full mix ' + esc(nice(row.full_mix)) + '</button>'; }).join('') + '</details>';
     var sectionStrip = (report.sections || []).length ? '<div class="section-strip" aria-label="Detected song sections">' + report.sections.map(function (section) {
       return '<button type="button" data-section-time="' + section.start + '">' + esc(section.label) + '<small>' + fmt(section.start) + '–' + fmt(section.end) + '</small></button>';
     }).join('') + '</div>' : '';
@@ -1471,10 +1564,11 @@
     $('chordResults').innerHTML = summary + recommendation + sectionStrip + timeline;
     var tuningText = Math.abs(report.tuning_cents || 0) < 5 ? 'Tuning is close to concert pitch.' : 'Recording is about ' + Math.abs(Math.round(report.tuning_cents)) + ' cents ' + (report.tuning_cents < 0 ? 'flat' : 'sharp') + '.';
     var rhythmText = report.rhythm_pattern ? ' Estimated 4/4 strum hits: <b>' + esc(report.rhythm_pattern) + '</b> (X = likely attack; audio cannot reliably tell down from up).' : '';
-    $('scaleGuide').hidden = false; $('scaleGuide').innerHTML = '<span>Improvisation scale: </span>' + scaleSuggestion(report) + ' ' + tuningText + rhythmText;
+    $('scaleGuide').hidden = false; $('scaleGuide').innerHTML = '<span>Improvisation scale: </span>' + scaleSuggestion(report) + alternativeGuide(report) + ' ' + tuningText + rhythmText;
     $('chordTracker').hidden = !segments.length;
     trackerIndex = -1;
     updateChordTracker(!startAtZero && S.ws && S.ws.getCurrentTime ? S.ws.getCurrentTime() : 0);
+    syncProject();
   }
 
   function updateChordTracker(time) {
@@ -1628,6 +1722,12 @@
     var button = e.target.closest('[data-chord-time]'); if (!button || !S.ws) return;
     openChordEditor(Number(button.getAttribute('data-chord-index')));
     S.ws.setTime(Number(button.getAttribute('data-chord-time')) || 0); S.ws.play();
+  });
+  $('chordResults').addEventListener('dblclick', function (event) {
+    var button = event.target.closest('[data-section-time]'), report = S.chords[S.cur]; if (!button || !report) return;
+    event.preventDefault(); var start = Number(button.dataset.sectionTime), section = (report.sections || []).filter(function (row) { return Math.abs(row.start-start)<.01; })[0]; if (!section) return;
+    var label = prompt('Name this section (Verse, Chorus, Bridge…)', section.label); if (!label || !label.trim()) return; section.label = label.trim().slice(0, 40);
+    var names = {}; report.sections.forEach(function (row) { names[Number(row.start).toFixed(2)] = row.label; }); post('/api/projects/' + S.cur, { section_names:names }); showChordReport(report);
   });
 
   // ── guitar tuner (all in the browser: mic → pitch detection, nothing is sent anywhere) ──
