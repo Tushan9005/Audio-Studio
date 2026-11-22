@@ -23,6 +23,11 @@
       <button class="btn rec" id="recBtn" type="button"><span class="rec-dot" aria-hidden="true"></span>Record</button>
     </div>
     <div class="rec-bar" id="recBar" hidden><span class="dot"></span><span id="recTime">0:00</span><canvas id="recMeter" width="120" height="22"></canvas><button class="btn small" id="recStop" type="button">■ Stop</button></div>
+    <form class="link-import" id="linkImport">
+      <label for="socialUrl">Import audio from a Reel or video</label>
+      <div><input id="socialUrl" type="url" inputmode="url" autocomplete="off" placeholder="Paste Instagram, Facebook or YouTube link" required><button class="btn" id="linkImportBtn" type="submit">Get audio &amp; find chords</button></div>
+      <p>Public videos only. Use content you have permission to download.</p>
+    </form>
     <div class="drop" id="drop">or drop songs, videos and photos here</div>
     <div class="lib-head"><span>Library</span><span id="libCount"></span></div>
     <div class="chips" role="group" aria-label="Show">
@@ -61,6 +66,12 @@
           <label class="zoom">Zoom <input type="range" id="zoom" min="0" max="300" value="0"></label>
         </div>
       </div>
+
+      <section class="chord-tracker" id="chordTracker" aria-label="Live chord tracker" hidden>
+        <div class="tracker-now"><div><span>Now</span><b id="trackerChord" aria-live="polite">–</b></div><div class="mini-chord" id="trackerNowDiagram"></div></div>
+        <div class="tracker-change"><span id="trackerCountdown">Ready</span><div class="tracker-progress" aria-hidden="true"><i id="trackerProgress"></i></div></div>
+        <div class="tracker-next"><div class="mini-chord" id="trackerNextDiagram"></div><div><span>Next</span><b id="trackerNext">–</b></div></div>
+      </section>
 
       <nav class="tabs" role="tablist">
         <button role="tab" data-t="edit" aria-selected="true">Edit</button>
@@ -349,6 +360,25 @@
 
       <!-- ANALYSE -->
       <div class="panel" data-p="analyse" hidden>
+        <div class="card wide chord-card">
+          <div class="chord-head"><div><h3>Guitar chords</h3><p class="note">Estimates the played chords from the recording and places them on a clickable timeline. Singing and backing instruments can affect the result, so check uncertain changes by ear.</p></div><div class="chord-analyse-actions"><label class="tick"><input type="checkbox" id="chordAccurate"> Isolate guitar for best accuracy <small>slower</small></label><button class="btn primary" id="chordBtn" data-do="chords">Find guitar chords</button></div></div>
+          <div class="chord-tools" aria-label="Chord display options">
+            <label class="tick"><input type="checkbox" id="chordSimple"> Basic shapes</label>
+            <div class="transpose-control"><span>Chord shapes</span><button class="btn small" id="chordDown" type="button" aria-label="Transpose down one semitone">−</button><output id="chordTranspose">Original key</output><button class="btn small" id="chordUp" type="button" aria-label="Transpose up one semitone">+</button></div>
+            <button class="btn small" id="chordEasy" type="button">Find easiest key</button>
+            <button class="btn small" id="chordHard" type="button">Loop hardest change</button>
+            <button class="btn small ghost" id="chordReset" type="button">Original</button>
+            <span class="capo-note" id="chordCapo">No capo</span>
+          </div>
+          <div class="chord-editor" id="chordEditor" hidden>
+            <span>Correct chord at <b id="chordEditTime">–</b></span>
+            <label>Sounding chord <select id="chordChoice"></select></label>
+            <button class="btn small primary" id="chordSave" type="button">Save correction</button>
+            <button class="btn small ghost" id="chordUndo" type="button">Use detected chord</button>
+            <span class="note">Corrections are kept in this browser.</span>
+          </div>
+          <div id="chordResults" aria-live="polite"><p class="chord-empty">Import a link above or analyse the selected file.</p></div>
+        </div>
         <div class="card personal-presets">
           <h3>Recording health &amp; improvement suggestions</h3>
           <p class="note">Checks the first two minutes for level, possible clipping, dynamics, tonal balance and stereo cancellation. Suggestions are starting points, not a verdict on your singing or whether harmonies fit the chords. Noise, reverb quality and tuning are not judged.</p>

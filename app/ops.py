@@ -590,6 +590,112 @@ def analyse(fid):
             "lufs": float(lufs[-1]) if lufs else None, "peak_db": float(peak[-1]) if peak else None}
 
 
+def analyse_chords(fid, accurate=False, progress=lambda _x: None, stage=lambda _s: None):
+    """Estimate beat-aligned major/minor guitar chords from a mixed recording.
+
+    This is deliberately an estimate: vocals and other instruments can share the
+    same pitch classes. HPSS emphasizes sustained harmony before template matching.
+    """
+    import librosa
+    it = need(get(fid), "audio", "video")
+    method = "full mix"
+    if accurate:
+        stage("Separating the guitar from vocals")
+        sources, source_sr = separate(it, lambda value: progress(value * .65), stage)
+        guitar = sources.get("guitar")
+        if guitar is None or not guitar.size or float(np.sqrt(np.mean(guitar ** 2))) < 1e-5:
+            raise MediaError("The accurate analysis could not isolate a clear guitar. Try Fast analysis on the full mix.")
+        y = guitar.mean(axis=1).astype(np.float32)
+        y = librosa.resample(y, orig_sr=source_sr, target_sr=22050)
+        sr, method = 22050, "isolated guitar"
+        progress(.68)
+    else:
+        stage("Listening for harmony")
+        y, sr = _load_mono(it, max_s=1200)
+        progress(.2)
+    harmonic, _ = librosa.effects.hpss(y, margin=(1.0, 3.0))
+    hop = 512
+    tuning = float(librosa.estimate_tuning(y=harmonic, sr=sr))
+    if not np.isfinite(tuning):
+        tuning = 0.0
+    chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sr, hop_length=hop, tuning=tuning)
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop)
+    tempo = float(np.atleast_1d(tempo)[0])
+    duration = len(y) / sr
+    progress(.82 if accurate else .62)
+    stage("Matching chord shapes")
+
+    # Start/end boundaries on beats. Fall back to half-second windows for sparse audio.
+    boundaries = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
+    boundaries = np.unique(np.clip(np.concatenate(([0.0], boundaries, [duration])), 0, duration))
+    if len(boundaries) < 4:
+        boundaries = np.arange(0, duration + .5, .5)
+        boundaries[-1] = duration
+
+    templates, labels = [], []
+    for root in range(12):
+        for quality, tones, weights in (("", (0, 4, 7), (1.0, .82, .68)), ("m", (0, 3, 7), (1.0, .82, .68))):
+            v = np.full(12, .04)
+            for tone, weight in zip(tones, weights):
+                v[(root + tone) % 12] = weight
+            templates.append(v / np.linalg.norm(v))
+            labels.append(_KEYS[root] + quality)
+    templates = np.asarray(templates)
+    raw = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        a = max(0, int(start * sr / hop)); b = min(chroma.shape[1], max(a + 1, int(end * sr / hop)))
+        vector = np.median(chroma[:, a:b], axis=1)
+        energy = float(np.mean(rms[a:min(b, len(rms))])) if a < len(rms) else 0
+        norm = np.linalg.norm(vector)
+        scores = templates @ (vector / norm) if norm > 1e-8 else np.zeros(len(labels))
+        order = np.argsort(scores)
+        best_i, next_i = int(order[-1]), int(order[-2])
+        confidence = max(0.0, min(1.0, (float(scores[best_i]) - float(scores[next_i])) * 4.0 + .22))
+        chord = labels[best_i] if energy > .003 and float(scores[best_i]) > .58 else "N.C."
+        raw.append({"start": float(start), "end": float(end), "chord": chord, "confidence": confidence})
+
+    # Remove isolated one-beat flips, then combine consecutive beats into readable regions.
+    for i in range(1, len(raw) - 1):
+        if raw[i-1]["chord"] == raw[i+1]["chord"] != raw[i]["chord"] and raw[i]["confidence"] < .48:
+            raw[i]["chord"] = raw[i-1]["chord"]
+    segments = []
+    for row in raw:
+        if segments and segments[-1]["chord"] == row["chord"]:
+            old_d = segments[-1]["end"] - segments[-1]["start"]
+            new_d = row["end"] - row["start"]
+            segments[-1]["confidence"] = (segments[-1]["confidence"] * old_d + row["confidence"] * new_d) / max(.001, old_d + new_d)
+            segments[-1]["end"] = row["end"]
+        else:
+            segments.append(dict(row))
+    for row in segments:
+        row["start"] = round(row["start"], 2); row["end"] = round(row["end"], 2)
+        row["confidence"] = round(row["confidence"], 2)
+
+    durations = {}
+    confidence_seconds = 0.0
+    sounding_seconds = 0.0
+    for row in segments:
+        if row["chord"] != "N.C.":
+            seconds = row["end"] - row["start"]
+            durations[row["chord"]] = durations.get(row["chord"], 0) + seconds
+            confidence_seconds += row["confidence"] * seconds
+            sounding_seconds += seconds
+    common = [name for name, _seconds in sorted(durations.items(), key=lambda pair: pair[1], reverse=True)[:8]]
+    key_chroma = chroma.mean(axis=1)
+    best, key = -2, ""
+    for root in range(12):
+        for profile, mode in ((_MAJ, "major"), (_MIN, "minor")):
+            correlation = np.corrcoef(np.roll(profile, root), key_chroma)[0, 1]
+            if correlation > best:
+                best, key = correlation, "%s %s" % (_KEYS[root], mode)
+    progress(1.0)
+    return {"duration": round(duration, 2), "bpm": round(tempo, 1), "key": key,
+            "common_chords": common, "segments": segments, "method": method,
+            "overall_confidence": round(confidence_seconds / max(.001, sounding_seconds), 2),
+            "tuning_cents": round(tuning * 100, 1)}
+
+
 def best_part(fid, length):
     """The liveliest stretch of a song (energy + beats), starting on a beat; for Reels and Stories."""
     import librosa

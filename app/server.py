@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import media, ops, tune
+from . import media, ops, tune, social
 from .media import MediaError
 
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -160,7 +160,19 @@ LABELS = {"trim": "Keep only this part", "cut": "Remove a part", "fade": "Fades"
           "effects_video": "Polish video sound", "best": "Best part", "video_music": "Music under video",
           "beat_reel": "Beat reel", "practice": "Practice copy", "voice": "Voiceover", "vocal_layers": "Vocal layers mix",
           "tune": "Save tuned version", "analyse": "Tempo & key", "sound_check": "Sound check",
-          "split": "Split song", "tune_prepare": "Analyse singing"}
+          "split": "Split song", "tune_prepare": "Analyse singing", "chords": "Guitar chord analysis",
+          "link_import": "Import audio & analyse link"}
+
+
+@app.post("/api/import-link")
+async def import_link(request: Request):
+    url = social.validate_url((await request.json()).get("url"))
+
+    def run(progress, stage):
+        item = social.import_audio(url, progress, stage)
+        report = ops.analyse_chords(item["id"], False, lambda value: progress(.48 + value * .52), stage)
+        return {"file": item, "chords": report}
+    return {"job": _start_job(run, "link_import")}
 
 
 @app.post("/api/do/{action}")
@@ -186,12 +198,14 @@ async def do(action: str, request: Request):
         "practice": lambda: ops.practice_copy(f, p.get("rate"), p.get("start"), p.get("end")),
         "voice": lambda: ops.voiceover(p.get("text"), p.get("voice"), p.get("speed"), p.get("music") or None, p.get("music_db"), p.get("music_from")),
     }
-    if action not in acts and action not in ("analyse", "tune", "sound_check"):
+    if action not in acts and action not in ("analyse", "chords", "tune", "sound_check"):
         raise MediaError("Unknown tool.")
 
     def run(progress, stage):
         if action == "analyse":
             return {"analysis": ops.analyse(f)}
+        if action == "chords":
+            return {"chords": ops.analyse_chords(f, bool(p.get("accurate")), progress, stage)}
         if action == "sound_check":
             return {"sound_check": ops.sound_check(f)}
         if action == "tune":

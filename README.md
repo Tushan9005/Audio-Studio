@@ -44,6 +44,16 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
 - **Voice:** English voiceover with the free Kokoro voice (model files read from `C:\Users\asus\npf-voice`,
   change with the STUDIO_KOKORO_DIR environment variable), optionally mixed with ducked music.
 - **Analyse:** tempo (BPM), key estimate, loudness (LUFS) and peak.
+- **Import & find chords:** paste a public Instagram, Facebook or YouTube video link. The app downloads only
+  its audio into the private local library (much faster than fetching and converting the video), estimates the guitar chords on a beat-aligned timeline, and lets you
+  click any chord to play from that moment. During playback, a live follow-along display shows the current chord,
+  next chord and time remaining until the change. Chord controls can reduce names to basic major/minor shapes,
+  transpose every chord, or find the easiest open-chord key with a capo recommendation. Results include an
+  automatic original-vs-capo recommendation and confidence level. Optional accurate analysis uses Demucs to
+  isolate the guitar from vocals before detecting chords (slower). Chords remain computer estimates; unusual
+  voicings or a quiet guitar can affect them. The live tracker includes current/next chord diagrams; timeline
+  chords can be corrected and those corrections persist in the browser. “Loop hardest change” selects the most
+  demanding transition as an A–B practice loop. Only download content you have permission to use.
 
 ## Safety
 Listens on 127.0.0.1 only and refuses requests from other web pages (Host/Origin check).

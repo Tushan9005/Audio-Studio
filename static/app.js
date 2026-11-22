@@ -7,8 +7,11 @@
   var TS = { infos: {}, keyFor: null, key: 'C', scale: 'major', strength: 100, style: 0, ref: 'guitar', scales: null, voices: null, summary: null };
   var NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   function nice(n) { return String(n).replace('#', '♯'); }
-  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
+  var S = { files: [], cur: null, ticks: [], filter: 'all', ws: null, regions: null, region: null, presets: {}, voices: {}, chords: {}, chordPrefs: {}, rate: 1, abPlay: false, gapT: null, fxPreview: null };
   var fxAudioContext = null, fxSources = new WeakMap(), fxRebuildTimer = null;
+  var trackerIndex = -1;
+  var chordEditIndex = -1;
+  var BASIC_FINGERINGS = { C:'x32010', D:'xx0232', E:'022100', F:'133211', G:'320003', A:'x02220', B:'x24442', Am:'x02210', Bm:'x24432', Cm:'x35543', 'C#m':'x46654', Dm:'xx0231', 'D#m':'x68876', Em:'022000', Fm:'133111', 'F#m':'244222', Gm:'355333', 'G#m':'466444', 'A#m':'x13321' };
 
   // ── helpers ──
   function fmt(t) { t = Math.round(Math.max(0, t || 0) * 10) / 10; var m = Math.floor(t / 60), s = t - m * 60; return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1); }
@@ -42,6 +45,66 @@
   function post(url, body) { return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   function curFile() { return S.files.filter(function (f) { return f.id === S.cur; })[0] || null; }
   function byId(id) { return S.files.filter(function (f) { return f.id === id; })[0]; }
+  function chordPrefs() { return S.chordPrefs[S.cur] || (S.chordPrefs[S.cur] = { shift: 0, simple: false }); }
+  function transposeRoot(root, shift) {
+    var flats = { Db: 1, Eb: 3, Gb: 6, Ab: 8, Bb: 10 }, pc = NOTE_NAMES.indexOf(root);
+    if (pc < 0) pc = flats[root];
+    return pc == null ? root : NOTE_NAMES[(pc + shift % 12 + 12) % 12];
+  }
+  function displayChord(chord) {
+    if (!chord || chord === 'N.C.') return chord || 'N.C.';
+    var match = /^([A-G](?:#|b)?)(.*)$/.exec(chord); if (!match) return chord;
+    var rest = match[2], prefs = chordPrefs();
+    if (prefs.simple) rest = /^m(?!aj)/.test(rest) ? 'm' : '';
+    return transposeRoot(match[1], prefs.shift) + rest;
+  }
+  function displayKey(key) {
+    var match = /^([A-G](?:#|b)?)(.*)$/.exec(key || '');
+    return match ? transposeRoot(match[1], chordPrefs().shift) + match[2] : key;
+  }
+  function basicChordName(chord) {
+    var match = /^([A-G](?:#|b)?)(.*)$/.exec(chord || '');
+    return match ? match[1] + (/^m(?!aj)/.test(match[2]) ? 'm' : '') : chord;
+  }
+  function chordDiagram(chord) {
+    var name = basicChordName(chord), shape = BASIC_FINGERINGS[name];
+    if (!shape) return '<span class="no-diagram">No basic<br>shape</span>';
+    var frets = shape.split('').map(function (value) { return /\d/.test(value) ? Number(value) : value; });
+    var pressed = frets.filter(function (value) { return typeof value === 'number' && value > 0; });
+    var base = pressed.length && Math.max.apply(Math, pressed) > 4 ? Math.min.apply(Math, pressed) : 1;
+    var svg = '<svg viewBox="0 0 76 78" role="img" aria-label="' + esc(nice(name)) + ' chord diagram">';
+    svg += '<g stroke="currentColor" stroke-width="1" opacity=".55">';
+    for (var string = 0; string < 6; string++) svg += '<path d="M' + (8 + string * 12) + ' 17V73"/>';
+    for (var fret = 0; fret < 6; fret++) svg += '<path d="M8 ' + (17 + fret * 11) + 'H68"/>';
+    svg += '</g>';
+    if (base > 1) svg += '<text x="1" y="30" fill="currentColor" font-size="8">' + base + '</text>';
+    frets.forEach(function (value, string) {
+      var x = 8 + string * 12;
+      if (value === 'x') svg += '<text x="' + (x - 3) + '" y="11" fill="currentColor" font-size="9">×</text>';
+      else if (value === 0) svg += '<circle cx="' + x + '" cy="8" r="3" fill="none" stroke="currentColor"/>';
+      else svg += '<circle cx="' + x + '" cy="' + (22.5 + (value - base) * 11) + '" r="4" fill="#f0a23b"/>';
+    });
+    return svg + '</svg>';
+  }
+  function correctionStore() {
+    try { return JSON.parse(localStorage.getItem('audioStudioChordCorrections') || '{}'); } catch (e) { return {}; }
+  }
+  function correctionKey(row) { return Number(row.start || 0).toFixed(2); }
+  function applyChordCorrections(report) {
+    var saved = correctionStore()[S.cur] || {};
+    (report.segments || []).forEach(function (row) {
+      if (!row.detected_chord) row.detected_chord = row.chord;
+      row.chord = saved[correctionKey(row)] || row.detected_chord;
+    });
+    var totals = {};
+    (report.segments || []).forEach(function (row) { if (row.chord !== 'N.C.') totals[row.chord] = (totals[row.chord] || 0) + row.end - row.start; });
+    report.common_chords = Object.keys(totals).sort(function (a, b) { return totals[b] - totals[a]; }).slice(0, 8);
+  }
+  function saveChordCorrection(row, value) {
+    var all = correctionStore(), file = all[S.cur] || (all[S.cur] = {}), key = correctionKey(row);
+    if (value && value !== row.detected_chord) file[key] = value; else delete file[key];
+    try { localStorage.setItem('audioStudioChordCorrections', JSON.stringify(all)); } catch (e) {}
+  }
 
   // ── background jobs: everything long runs on the server (or uploads in the browser) while you keep working.
   // The header's Jobs tray shows progress; a notification (and, if allowed, a Windows notification) says when
@@ -88,11 +151,12 @@
   }
   function openJob(j) {
     var r = j.result || {}, fid = (r.file && r.file.id) || (r.files && r.files[0] && r.files[0].id) || j.fid;
-    var tab = { tune_prepare: 'tune', analyse: 'analyse', sound_check: 'analyse' }[j.action];
+    var tab = { tune_prepare: 'tune', analyse: 'analyse', chords: 'analyse', link_import: 'analyse', sound_check: 'analyse' }[j.action];
     var go = function () {
       if (fid && byId(fid)) select(fid);
       if (tab) document.querySelector('.tabs [data-t="' + tab + '"]').click();
       if (r.analysis) showStats(r.analysis);
+      if (r.chords) showChordReport(r.chords);
       if (r.sound_check) showSoundCheck(r.sound_check);
       $('jobsTray').hidden = true; $('jobsBtn').setAttribute('aria-expanded', 'false');
     };
@@ -112,7 +176,7 @@
     (hook.done || []).forEach(function (fn) { fn(r); });
     var text = files.length > 1 ? files.length + ' files added: ' + files.map(function (f) { return f.name.split(' · ').pop(); }).join(', ') :
       files.length ? '"' + files[0].name + '" is in your library.' : j.action === 'tune_prepare' ? (r.keys ? 'Key ' + r.keys[0].label + (r.together ? ', guitar at A = ' + r.guitar_a + ' Hz' : '') + '. Ready to tune.' : 'Ready.') :
-      j.action === 'analyse' ? 'Tempo, key and loudness are ready.' : j.action === 'sound_check' ? 'Your sound check is ready.' : '';
+      j.action === 'analyse' ? 'Tempo, key and loudness are ready.' : (j.action === 'chords' || j.action === 'link_import') ? 'The chord timeline is ready.' : j.action === 'sound_check' ? 'Your sound check is ready.' : '';
     if (!hook.quiet) notify({ title: j.label + ' done' + (j.fname && !files.length ? ' · ' + j.fname : ''), text: text, action: { label: 'Open', fn: function () { openJob(j); } } });
     desktopNote(j.label + ' done', text);
   }
@@ -250,6 +314,19 @@
   ['dragleave', 'drop'].forEach(function (ev) { document.addEventListener(ev, function (e) { e.preventDefault(); if (ev === 'drop' || !e.relatedTarget) $('drop').classList.remove('over'); }); });
   document.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files.length) upload(e.dataTransfer.files); });
 
+  $('linkImport').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var url = $('socialUrl').value.trim(), button = $('linkImportBtn');
+    if (!url) return;
+    button.disabled = true; button.textContent = 'Starting...';
+    startJob('/api/import-link', { url: url }, function (r) {
+      button.disabled = false; button.textContent = 'Get audio & find chords'; $('socialUrl').value = '';
+      load(r.file && r.file.id).then(function () { document.querySelector('.tabs [data-t="analyse"]').click(); if (r.chords) showChordReport(r.chords); });
+    }, function () { button.disabled = false; button.textContent = 'Get audio & find chords'; }).then(function () {
+      toast('Downloading the audio and analysing it in the background. See Jobs.');
+    }, function (x) { button.disabled = false; button.textContent = 'Get audio & find chords'; toast(x.message, true); });
+  });
+
   // ── recording (voice processing OFF so guitar and singing are captured as they are) ──
   var rec = null;
   $('recBtn').addEventListener('click', function () {
@@ -289,6 +366,9 @@
     var f = byId(id); if (!f) return;
     stopFxPreview(); stopLayerPreview(); stopTunePreview();
     S.cur = id; showStage(); drawList();
+    trackerIndex = -1;
+    if (S.chords[id]) showChordReport(S.chords[id], true);
+    else { $('chordResults').innerHTML = '<p class="chord-empty">Import a link above or analyse the selected file.</p>'; $('chordTracker').hidden = true; syncChordTools(false); }
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
     $('dl').href = '/download/' + id;
@@ -307,8 +387,8 @@
         S.regions.on('region-created', function (r) { S.regions.getRegions().forEach(function (o) { if (o !== r) o.remove(); }); S.region = r; showSel(); });
         S.regions.on('region-update', function () { showSel(); });     // live while a handle is dragged
         S.regions.on('region-updated', function () { showSel(); });
-        S.ws.on('timeupdate', function (t) { $('time').textContent = fmt(t) + ' / ' + fmt(S.ws.getDuration()); regionEnd(t); if (graphStatic) drawPlayhead(); });
-        S.ws.on('ready', function () { $('time').textContent = '0:00.0 / ' + fmt(S.ws.getDuration()); applyZoom(); applyRate(); if (!S.region) resetFrame(); });
+        S.ws.on('timeupdate', function (t) { $('time').textContent = fmt(t) + ' / ' + fmt(S.ws.getDuration()); regionEnd(t); updateChordTracker(t); if (graphStatic) drawPlayhead(); });
+        S.ws.on('ready', function () { $('time').textContent = '0:00.0 / ' + fmt(S.ws.getDuration()); applyZoom(); applyRate(); updateChordTracker(0); if (!S.region) resetFrame(); });
         S.ws.on('interaction', function () { S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; });
         S.ws.on('play', function () { $('play').textContent = '❚❚'; });
         S.ws.on('pause', function () { if (!S.gapT) $('play').textContent = '▶'; });
@@ -317,7 +397,7 @@
     }
     S.region = null; S.abPlay = false; clearTimeout(S.gapT); S.gapT = null; showSel();
     var hasSound = f.kind === 'audio' || (f.kind === 'video' && f.has_audio);
-    ['splitBtn', 'setA', 'setB', 'clearAB', 'trReset'].forEach(function (k) { $(k).disabled = !hasSound; });
+    ['splitBtn', 'setA', 'setB', 'clearAB', 'trReset', 'chordBtn'].forEach(function (k) { $(k).disabled = !hasSound; });
     document.querySelectorAll('[data-nudge], [data-here]').forEach(function (b) { b.disabled = !hasSound; });
     $('trimCard').querySelector('.exact').open = f.kind === 'video' && !f.has_audio;   // no waveform: type the times
     document.querySelector('[data-do="practice"]').disabled = !hasSound;
@@ -1200,7 +1280,7 @@
 
   // ── run a tool ──
   var MSG = { effects: 'Applying effects…', effects_video: 'Polishing the sound and rebuilding your video…', beat_reel: 'Finding the beats and cutting your clips… (this can take a minute)', video_music: 'Mixing music into the video…',
-              voice: 'Making the voiceover…', tune: 'Saving your tuned version…', vocal_layers: 'Mixing your vocal layers…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', best: 'Finding the best part…', export: 'Saving…' };
+              voice: 'Making the voiceover…', tune: 'Saving your tuned version…', vocal_layers: 'Mixing your vocal layers…', practice: 'Making your practice copy…', analyse: 'Listening for tempo and key…', chords: 'Listening for guitar chords…', best: 'Finding the best part…', export: 'Saving…' };
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-do]'); if (!b || b.disabled) return;
     var a = b.getAttribute('data-do'), f = curFile();
@@ -1236,6 +1316,7 @@
     if (a === 'effects' || a === 'effects_video') { body.fx = fxValues(); stopFxPreview(); }
     if (a === 'best') body.length = $('bestLen').value;
     if (a === 'practice') { body.rate = S.rate; var ps = selected(); if (ps) { body.start = ps.start; body.end = ps.end; } }
+    if (a === 'chords') body.accurate = $('chordAccurate').checked;
     if (a === 'video_music') {
       body.music = $('vmMusic').value; body.music_from = $('vmFrom').value; body.music_db = $('vmDb').value; body.keep_original = $('vmKeep').checked;
       body.duck = $('vmDuck').checked; body.original_db = $('vmOrig').value; body.fade_out = $('vmFade').value;
@@ -1256,6 +1337,7 @@
     startJob('/api/do/' + a, body, function (r) {
       if (r.sound_check && S.cur === fid) showSoundCheck(r.sound_check);
       if (r.analysis && S.cur === fid) showStats(r.analysis);
+      if (r.chords && S.cur === fid) showChordReport(r.chords);
     }).then(function () {
       if (!$('jobsTray').hidden) return;
       toast((MSG[a] || 'Working…').replace('…', '') + ' in the background. See Jobs.');
@@ -1271,6 +1353,165 @@
     $('stats').innerHTML = items.map(function (x) { return '<div class="stat"><b>' + esc(x[1]) + '</b><span>' + esc(x[0]) + '</span></div>'; }).join('') +
       (adv ? '<p class="note" style="grid-column:1/-1">Loudness: ' + esc(adv) + '. Key is a computer estimate from the notes it hears; check it on your guitar.</p>' : '');
   }
+
+  function showChordReport(report, startAtZero) {
+    if (S.cur) S.chords[S.cur] = report;
+    applyChordCorrections(report);
+    chordEditIndex = -1; $('chordEditor').hidden = true;
+    var common = report.common_chords || [], segments = report.segments || [];
+    syncChordTools(true);
+    var summary = '<div class="chord-summary"><b>' + esc(nice(displayKey(report.key || 'Key uncertain'))) + '</b><span>' + esc(report.bpm) + ' BPM</span><span>Most used:</span>' +
+      (common.length ? common.map(function (c) { return '<span class="chord-pill">' + esc(nice(displayChord(c))) + '</span>'; }).join('') : '<span>no stable chords found</span>') + '</div>';
+    var recommendedShift = easiestChordShift(report), keyMatch = /^([A-G](?:#|b)?)(.*)$/.exec(report.key || '');
+    var recommendedKey = keyMatch ? transposeRoot(keyMatch[1], recommendedShift) + keyMatch[2] : report.key;
+    var recommendation = recommendedShift ? 'Use <b>' + esc(nice(recommendedKey)) + ' shapes with capo ' + (-recommendedShift) + '</b> to match the recording.' : '<b>Use the original shapes with no capo.</b>';
+    var confidence = Math.round((report.overall_confidence || 0) * 100), lowConfidence = confidence && confidence < 42;
+    recommendation = '<div class="chord-recommendation' + (lowConfidence ? ' warn' : '') + '">' + recommendation +
+      ' Recommendation is based on the whole detected progression. ' + (confidence ? 'Detection confidence: ' + confidence + '%. ' : '') +
+      (report.method === 'isolated guitar' ? 'Vocals were separated for this analysis.' : 'Use “Isolate guitar” if vocals are masking chord changes.') + '</div>';
+    var timeline = '<div class="chord-timeline" aria-label="Chord timeline">' + segments.map(function (row, index) {
+      var width = Math.max(62, Math.min(180, (row.end - row.start) * 34));
+      return '<button class="chord-segment' + (row.confidence < .42 ? ' low' : '') + '" type="button" data-chord-time="' + row.start + '" data-chord-index="' + index + '" style="width:' + width + 'px" title="' + Math.round(row.confidence * 100) + '% confidence; click to play"><b>' + esc(nice(displayChord(row.chord))) + '</b><span>' + fmt(row.start) + '-' + fmt(row.end) + '</span></button>';
+    }).join('') + '</div><p class="note">Click a chord to play from that moment. Dashed chords are less certain. “N.C.” means no clear chord.</p>';
+    $('chordResults').innerHTML = summary + recommendation + timeline;
+    $('chordTracker').hidden = !segments.length;
+    trackerIndex = -1;
+    updateChordTracker(!startAtZero && S.ws && S.ws.getCurrentTime ? S.ws.getCurrentTime() : 0);
+  }
+
+  function updateChordTracker(time) {
+    var report = S.chords[S.cur], segments = report && report.segments;
+    if (!segments || !segments.length) { $('chordTracker').hidden = true; return; }
+    $('chordTracker').hidden = false;
+    var lo = 0, hi = segments.length - 1, index = 0;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (time < segments[mid].start) hi = mid - 1;
+      else { index = mid; lo = mid + 1; }
+    }
+    if (time >= segments[index].end && index < segments.length - 1) index++;
+    var current = segments[index], next = segments[index + 1], length = Math.max(.01, current.end - current.start);
+    var remaining = Math.max(0, current.end - time), through = Math.max(0, Math.min(1, (time - current.start) / length));
+    $('trackerChord').textContent = nice(displayChord(current.chord));
+    $('trackerNext').textContent = next ? nice(displayChord(next.chord)) : 'End';
+    $('trackerCountdown').textContent = next ? 'Change in ' + remaining.toFixed(1) + ' s' : remaining.toFixed(1) + ' s remaining';
+    $('trackerProgress').style.width = (through * 100).toFixed(1) + '%';
+    if (index !== trackerIndex) {
+      trackerIndex = index;
+      $('trackerNowDiagram').innerHTML = chordDiagram(displayChord(current.chord));
+      $('trackerNextDiagram').innerHTML = next ? chordDiagram(displayChord(next.chord)) : '<span class="no-diagram">Song<br>ending</span>';
+      document.querySelectorAll('.chord-segment.active').forEach(function (button) { button.classList.remove('active'); });
+      var active = document.querySelector('.chord-segment[data-chord-index="' + index + '"]');
+      if (active) {
+        active.classList.add('active');
+        var strip = active.parentElement;
+        strip.scrollLeft = Math.max(0, active.offsetLeft - strip.clientWidth / 2 + active.offsetWidth / 2);
+      }
+    }
+  }
+
+  function syncChordTools(enabled) {
+    var prefs = chordPrefs(), controls = [$('chordSimple'), $('chordDown'), $('chordUp'), $('chordEasy'), $('chordHard'), $('chordReset')];
+    controls.forEach(function (control) { control.disabled = !enabled; });
+    $('chordSimple').checked = !!prefs.simple;
+    $('chordDown').disabled = !enabled || prefs.shift <= -11;
+    $('chordUp').disabled = !enabled || prefs.shift >= 11;
+    $('chordTranspose').textContent = prefs.shift ? (prefs.shift > 0 ? '+' : '') + prefs.shift + ' semitone' + (Math.abs(prefs.shift) === 1 ? '' : 's') : 'Original key';
+    var capo = (-prefs.shift % 12 + 12) % 12;
+    $('chordCapo').textContent = capo ? 'Capo ' + capo + ' to match recording' : 'No capo';
+  }
+
+  function easiestChordShift(report) {
+    var easy = { C: 0, D: 0, E: 0, G: 0, A: 0, Am: 0, Dm: 0, Em: 0, F: .7, Bm: .7 };
+    var bestShift = 0, bestScore = Infinity;
+    for (var shift = -11; shift <= 0; shift++) {
+      var score = 0;
+      (report.segments || []).forEach(function (row) {
+        if (row.chord === 'N.C.') return;
+        var match = /^([A-G](?:#|b)?)(.*)$/.exec(row.chord); if (!match) return;
+        var shape = transposeRoot(match[1], shift) + (/^m(?!aj)/.test(match[2]) ? 'm' : '');
+        var difficulty = Object.prototype.hasOwnProperty.call(easy, shape) ? easy[shape] : 2;
+        if (shape.indexOf('#') >= 0) difficulty += .7;
+        score += difficulty * Math.max(.25, row.end - row.start);
+      });
+      score += Math.abs(shift) * .015;
+      if (score < bestScore) { bestScore = score; bestShift = shift; }
+    }
+    return bestShift;
+  }
+
+  $('chordSimple').addEventListener('change', function () {
+    chordPrefs().simple = this.checked;
+    if (S.chords[S.cur]) showChordReport(S.chords[S.cur]);
+  });
+  $('chordDown').addEventListener('click', function () {
+    chordPrefs().shift = Math.max(-11, chordPrefs().shift - 1);
+    if (S.chords[S.cur]) showChordReport(S.chords[S.cur]);
+  });
+  $('chordUp').addEventListener('click', function () {
+    chordPrefs().shift = Math.min(11, chordPrefs().shift + 1);
+    if (S.chords[S.cur]) showChordReport(S.chords[S.cur]);
+  });
+  $('chordEasy').addEventListener('click', function () {
+    var report = S.chords[S.cur]; if (!report) return;
+    var prefs = chordPrefs(); prefs.simple = true; prefs.shift = easiestChordShift(report);
+    showChordReport(report);
+  });
+  $('chordReset').addEventListener('click', function () {
+    var report = S.chords[S.cur]; if (!report) return;
+    var prefs = chordPrefs(); prefs.shift = 0; prefs.simple = false;
+    showChordReport(report);
+  });
+  function shapeDifficulty(first, second) {
+    var a = BASIC_FINGERINGS[basicChordName(first)], b = BASIC_FINGERINGS[basicChordName(second)];
+    if (!a || !b) return 8;
+    var score = 0;
+    for (var i = 0; i < 6; i++) {
+      var av = /\d/.test(a[i]) ? Number(a[i]) : -1, bv = /\d/.test(b[i]) ? Number(b[i]) : -1;
+      score += av < 0 || bv < 0 ? (av === bv ? 0 : 1.2) : Math.abs(av - bv);
+    }
+    return score;
+  }
+  $('chordHard').addEventListener('click', function () {
+    var report = S.chords[S.cur], segments = report && report.segments;
+    if (!S.ws || !segments || segments.length < 2) return;
+    var best = 1, bestScore = -1;
+    for (var i = 1; i < segments.length; i++) {
+      if (segments[i-1].chord === 'N.C.' || segments[i].chord === 'N.C.') continue;
+      var available = Math.max(.35, Math.min(segments[i-1].end - segments[i-1].start, segments[i].end - segments[i].start));
+      var score = shapeDifficulty(displayChord(segments[i-1].chord), displayChord(segments[i].chord)) / available;
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    var start = Math.max(0, segments[best-1].start - 1), end = Math.min(S.ws.getDuration(), segments[best].end + 1);
+    setRegion(start, end); $('prLoop').checked = true; showSel(); S.ws.setTime(start);
+    document.querySelector('.tabs [data-t="practice"]').click();
+    toast('Loop ready: ' + nice(displayChord(segments[best-1].chord)) + ' to ' + nice(displayChord(segments[best].chord)) + '. Press Play to practise it.');
+  });
+
+  (function fillChordChoices() {
+    $('chordChoice').add(new Option('No clear chord', 'N.C.'));
+    NOTE_NAMES.forEach(function (root) { $('chordChoice').add(new Option(nice(root), root)); $('chordChoice').add(new Option(nice(root) + ' minor', root + 'm')); });
+  })();
+  function openChordEditor(index) {
+    var report = S.chords[S.cur], row = report && report.segments && report.segments[index]; if (!row) return;
+    chordEditIndex = index; $('chordEditor').hidden = false; $('chordEditTime').textContent = fmt(row.start);
+    $('chordChoice').value = row.chord; if (!$('chordChoice').value) $('chordChoice').value = basicChordName(row.chord);
+  }
+  $('chordSave').addEventListener('click', function () {
+    var report = S.chords[S.cur], row = report && report.segments && report.segments[chordEditIndex]; if (!row) return;
+    saveChordCorrection(row, $('chordChoice').value); row.chord = $('chordChoice').value;
+    showChordReport(report); toast('Chord correction saved.');
+  });
+  $('chordUndo').addEventListener('click', function () {
+    var report = S.chords[S.cur], row = report && report.segments && report.segments[chordEditIndex]; if (!row) return;
+    saveChordCorrection(row, null); row.chord = row.detected_chord;
+    showChordReport(report); toast('Detected chord restored.');
+  });
+  $('chordResults').addEventListener('click', function (e) {
+    var button = e.target.closest('[data-chord-time]'); if (!button || !S.ws) return;
+    openChordEditor(Number(button.getAttribute('data-chord-index')));
+    S.ws.setTime(Number(button.getAttribute('data-chord-time')) || 0); S.ws.play();
+  });
 
   // ── guitar tuner (all in the browser: mic → pitch detection, nothing is sent anywhere) ──
   var NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
