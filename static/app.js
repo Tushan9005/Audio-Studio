@@ -45,6 +45,45 @@
   function post(url, body) { return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   function curFile() { return S.files.filter(function (f) { return f.id === S.cur; })[0] || null; }
   function byId(id) { return S.files.filter(function (f) { return f.id === id; })[0]; }
+  function safeDownloadName(name) {
+    return String(name || 'download').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 180) || 'download';
+  }
+  function mediaDownloadName(file) {
+    var name = safeDownloadName(file.name), suffix = '.' + file.ext.toLowerCase();
+    return name.toLowerCase().endsWith(suffix) ? name : name + suffix;
+  }
+  async function chooseSaveTarget(suggestedName) {
+    suggestedName = safeDownloadName(suggestedName);
+    if (window.showSaveFilePicker) {
+      try { return { handle:await window.showSaveFilePicker({ suggestedName:suggestedName }) }; }
+      catch (error) { if (error && error.name === 'AbortError') return null; throw error; }
+    }
+    var fallbackName = window.prompt('Save file as:', suggestedName);
+    return fallbackName && fallbackName.trim() ? { name:safeDownloadName(fallbackName.trim()) } : null;
+  }
+  async function saveResponse(response, target) {
+    if (!response.ok) {
+      var message = 'Download failed (' + response.status + ').';
+      try { var body = await response.json(); if (body.error) message = body.error; } catch (error) {}
+      throw new Error(message);
+    }
+    if (target.handle) {
+      var writable = await target.handle.createWritable();
+      try {
+        if (response.body && response.body.pipeTo) await response.body.pipeTo(writable);
+        else { await writable.write(await response.blob()); await writable.close(); }
+      } catch (error) { try { await writable.abort(); } catch (ignored) {} throw error; }
+      return;
+    }
+    var blob = await response.blob(), url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = target.name; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    toast('This browser cannot choose a folder directly. Enable “Ask where to save each file” in browser download settings for a folder prompt.');
+  }
+  async function saveRequest(url, options, suggestedName) {
+    var target = await chooseSaveTarget(suggestedName); if (!target) return false;
+    await saveResponse(await fetch(url, options || {}), target); return true;
+  }
   function syncProject() {
     if (!S.cur) return Promise.resolve();
     var corrections = correctionStore()[S.cur] || {}, goals = goalStore()[S.cur] || {};
@@ -349,14 +388,10 @@
   $('bulkDownload').addEventListener('click', function () {
     var ids = S.ticks.slice(), button = this; if (!ids.length) return;
     button.disabled = true; button.textContent = 'Preparing…';
-    fetch('/api/files/bulk-download', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ ids:ids }) }).then(function (response) {
-      if (!response.ok) return response.json().then(function (body) { throw new Error(body.error || 'Download failed.'); });
-      return response.blob().then(function (blob) {
-        var url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'Audio Studio selected files.zip';
-        document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
-        toast(ids.length + ' selected file' + (ids.length === 1 ? '' : 's') + ' downloaded as a ZIP.');
-      });
-    }).catch(function (error) { toast(error.message || 'Bulk download failed.', true); }).finally(function () { button.disabled = false; button.textContent = 'Download ZIP'; });
+    saveRequest('/api/files/bulk-download', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ ids:ids }) }, 'Audio Studio selected files.zip')
+      .then(function (saved) { if (saved) toast(ids.length + ' selected file' + (ids.length === 1 ? '' : 's') + ' saved.'); })
+      .catch(function (error) { toast(error.message || 'Bulk download failed.', true); })
+      .finally(function () { button.disabled = false; button.textContent = 'Download ZIP'; });
   });
   $('bulkDelete').addEventListener('click', function () {
     var ids = S.ticks.slice(), button = this; if (!ids.length) return;
@@ -462,8 +497,6 @@
     else { $('chordResults').innerHTML = '<p class="chord-empty">Loading saved project or analyse the selected file.</p>'; $('chordTracker').hidden = true; $('scaleGuide').hidden = true; syncChordTools(false); loadProject(id); }
     $('fname').value = f.name;
     $('fmeta').textContent = f.kind === 'image' ? (f.width + '×' + f.height + ' photo') : (fmt(f.duration) + ' · ' + f.ext.toUpperCase() + (f.kind === 'video' ? ' · ' + f.width + '×' + f.height + (f.has_audio ? '' : ' · no sound') : ''));
-    $('dl').href = '/download/' + id;
-    $('projectExport').href = '/api/projects/' + id + '/export';
     if (S.ws) { S.ws.destroy(); S.ws = null; S.region = null; }
     var vid = $('vid'), img = $('img');
     vid.pause(); vid.hidden = f.kind !== 'video'; img.hidden = f.kind !== 'image';
@@ -746,6 +779,20 @@
   $('fname').addEventListener('change', function () {
     if (!S.cur) return;
     post('/api/files/' + S.cur + '/rename', { name: this.value }).then(function () { return load(); });
+  });
+  $('dl').addEventListener('click', function () {
+    var file = curFile(), button = this; if (!file) return;
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    saveRequest('/download/' + file.id, {}, mediaDownloadName(file)).then(function (saved) { if (saved) toast('File saved.'); })
+      .catch(function (error) { toast(error.message || 'Download failed.', true); })
+      .finally(function () { button.disabled = false; button.removeAttribute('aria-busy'); });
+  });
+  $('projectExport').addEventListener('click', function () {
+    var file = curFile(), button = this; if (!file) return;
+    button.disabled = true; button.setAttribute('aria-busy', 'true');
+    saveRequest('/api/projects/' + file.id + '/export', {}, safeDownloadName(file.name) + '.audio-studio.zip').then(function (saved) { if (saved) toast('Project backup saved.'); })
+      .catch(function (error) { toast(error.message || 'Project backup failed.', true); })
+      .finally(function () { button.disabled = false; button.removeAttribute('aria-busy'); });
   });
   $('del').addEventListener('click', function () {
     var f = curFile(); if (!f || !confirm('Delete "' + f.name + '" from the library? This can\'t be undone.')) return;

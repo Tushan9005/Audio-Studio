@@ -9,7 +9,8 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
 - **Library:** add sound, video and photo files (button or drag & drop) or **record** from the mic
   (the browser's voice processing is switched off, so guitar and singing are captured as they are).
   Tick individual files or select everything shown to download them together as a ZIP or delete them in one
-  confirmed action. Every tool makes a new copy; originals are never changed. Files live in `workspace/`.
+  confirmed action. Downloads, project backups and bulk ZIPs use a native Save As picker in Chrome/Edge so you
+  choose the destination and filename. Every tool makes a new copy; originals are never changed. Files live in `workspace/`.
 - **Edit:** select on the waveform → keep / remove the part; fades; volume; loop; join ticked files
   with crossfade; save as MP3 / M4A / OGG / FLAC / WAV / MP4; take the sound out of a video.
 - **Tuner** (button at the top right): guitar tuner using the mic, all in the browser. Standard, Drop D,
