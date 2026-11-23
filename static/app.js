@@ -1905,6 +1905,17 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('tuner').hidden) tunerClose(); });
   $('tnTuning').addEventListener('change', drawStrings);
 
+  // Narrow public bridge for independently maintained studio modules such as
+  // the Live Looper. Audio internals stay private to this file.
+  window.AudioStudio = {
+    currentFile: curFile,
+    chordReport: function () { return S.chords[S.cur] || null; },
+    notify: toast,
+    chooseSaveTarget: chooseSaveTarget,
+    saveResponse: saveResponse,
+    refreshLibrary: load
+  };
+
   applyRate();
   load();
   pollJobs();

@@ -62,6 +62,11 @@ Free tools only: Python, FastAPI, ffmpeg (imageio-ffmpeg), librosa, Kokoro voice
   backing track plays. Smart practice loops the hardest change, starts at 60% speed and raises the speed as accuracy
   improves. Record a performance for a time-aligned comparison, set daily practice goals, and review recent results. Use headphones
   to prevent the backing track from being mistaken for the guitar. Only download content you have permission to use.
+- **Live Looper:** an eight-track Web Audio mixer with either first-take or BPM/bar master length, boundary-quantized
+  overdubs, microphone latency compensation, continuous take comping, synchronized waveforms and playheads, live
+  mute/solo/level/pan, layer undo/redo/delete, and individual-stem or full-master WAV/MP3 export. **Add AI instrument**
+  analyses the rendered loop and adds an exact-length drum, bass or pad layer through a replaceable provider endpoint;
+  the included provider works offline. See [the Looper architecture](docs/looper-architecture.md).
 - **Song projects:** analyses are cached so reopening a song is immediate. Chord corrections, display choices,
   section names, goals and locally transcribed lyrics are saved per song. Export a portable project ZIP (audio plus
   project data) and restore it later. A setup checker reports whether the optional tools are ready.

@@ -1,13 +1,13 @@
 """Audio Studio: a small local web app (http://127.0.0.1:8765), only reachable from this PC."""
 import importlib.util, os, secrets, shutil, threading, time, zipfile
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
-from . import media, ops, tune, social, projects
+from . import media, ops, tune, social, projects, looper
 from .media import MediaError
 
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -137,6 +137,68 @@ async def record(file: UploadFile = File(...), name: str = "Recording"):
         os.remove(raw)
 
 
+@app.post("/api/looper/ai-stem")
+async def looper_ai_stem(file: UploadFile = File(...), prompt: str = Form("add a bassline"),
+                         duration: float = Form(...), bpm: float = Form(0), key: str = Form(""),
+                         chords: str = Form("")):
+    if not .25 <= duration <= 180:
+        raise MediaError("Loop duration must be between 0.25 seconds and 3 minutes.")
+    raw = os.path.join(media.TMP, "looper-mix-%s.wav" % secrets.token_hex(5))
+    size = 0
+    try:
+        with open(raw, "wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk: break
+                size += len(chunk)
+                if size > 500 * 1024 ** 2: raise MediaError("The loop mix is bigger than 500 MB.")
+                handle.write(chunk)
+        fid, output = media.new_path("wav")
+        try:
+            analysis, provider = await run_in_threadpool(looper.generate_layer, raw, output, prompt, duration, bpm, key, chords)
+            item = media.register(fid, "wav", "AI layer - " + media.clean_name(prompt, "instrument"), "ai_layer")
+            return {"file": item, "analysis": analysis, "provider": provider,
+                    "provider_contract": "render(existing_mix, prompt, duration, bpm, key, chords) -> exact-length stem"}
+        except Exception:
+            try: os.remove(output)
+            except OSError: pass
+            raise
+    finally:
+        try: os.remove(raw)
+        except OSError: pass
+
+
+@app.post("/api/looper/encode/{format}")
+async def looper_encode(format: str, file: UploadFile = File(...), name: str = Form("Looper export")):
+    format = format.lower()
+    if format not in ("wav", "mp3"):
+        raise MediaError("Looper export supports WAV or MP3.")
+    raw = os.path.join(media.TMP, "looper-export-%s.wav" % secrets.token_hex(5))
+    output = os.path.join(media.TMP, "looper-export-%s.%s" % (secrets.token_hex(5), format))
+    size = 0
+    try:
+        with open(raw, "wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk: break
+                size += len(chunk)
+                if size > 500 * 1024 ** 2: raise MediaError("The loop export is bigger than 500 MB.")
+                handle.write(chunk)
+        args = ["-i", raw, "-vn"] + (["-c:a", "libmp3lame", "-b:a", "256k"] if format == "mp3" else ops.WAV) + [output]
+        await run_in_threadpool(media.run, args)
+        filename = media.clean_name(name, "Looper export") + "." + format
+        def cleanup():
+            for path in (raw, output):
+                try: os.remove(path)
+                except OSError: pass
+        return FileResponse(output, filename=filename, background=BackgroundTask(cleanup))
+    except Exception:
+        for path in (raw, output):
+            try: os.remove(path)
+            except OSError: pass
+        raise
+
+
 @app.post("/api/files/{fid}/rename")
 async def rename(fid: str, request: Request):
     media.get(fid)
@@ -214,6 +276,7 @@ def setup_check():
         {"name": "Social links", "ok": importlib.util.find_spec("yt_dlp") is not None, "detail": "yt-dlp"},
         {"name": "Offline lyrics", "ok": importlib.util.find_spec("faster_whisper") is not None,
          "detail": "faster-whisper" if importlib.util.find_spec("faster_whisper") else "optional dependency not installed"},
+        {"name": "Looper instrument provider", "ok": True, "detail": looper.PROVIDER.name + " (offline)"},
         {"name": "Free disk space", "ok": usage.free >= 2 * 1024 ** 3, "detail": "%.1f GB free" % (usage.free / 1024 ** 3)},
     ]
     return {"checks": checks, "ready": all(check["ok"] for check in checks if check["name"] != "Offline lyrics")}

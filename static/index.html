@@ -82,6 +82,7 @@
       <nav class="tabs" role="tablist">
         <button role="tab" data-t="edit" aria-selected="true">Edit</button>
         <button role="tab" data-t="practice" aria-selected="false">Practice</button>
+        <button role="tab" data-t="looper" aria-selected="false">Live Looper</button>
         <button role="tab" data-t="fx" aria-selected="false">Effects</button>
         <button role="tab" data-t="tune" aria-selected="false">Tune</button>
         <button role="tab" data-t="layers" aria-selected="false">Vocal layers</button>
@@ -178,6 +179,57 @@
             <div id="practiceHistory" class="practice-history"></div>
             <div class="practice-goals"><label>Daily minutes <input id="goalMinutes" type="number" min="5" max="180" value="15"></label><label>Target accuracy <input id="goalAccuracy" type="number" min="50" max="100" value="85"></label><button class="btn small" id="saveGoals" type="button">Save goals</button><span id="goalProgress"></span></div>
           </div>
+        </div>
+      </div>
+
+      <!-- LIVE LOOPER -->
+      <div class="panel" data-p="looper" hidden>
+        <section class="looper-command" aria-label="Live looper transport">
+          <div class="looper-title"><span>Multi-track session</span><strong>Live Looper</strong><p id="loopStatus">Set the clock, then record the first layer or load the selected file.</p></div>
+          <div class="loop-counter"><span>Cycle</span><b id="loopClock">0:00.0</b><div><i id="loopProgress"></i></div></div>
+          <div class="looper-transport">
+            <button class="btn" id="loopPlay" type="button">▶ Play</button>
+            <button class="btn primary" id="loopRecord" type="button">● Record layer</button>
+            <button class="btn" id="loopComp" type="button">Record takes</button>
+            <button class="btn ghost" id="loopUndo" type="button" disabled>Undo</button>
+            <button class="btn ghost" id="loopRedo" type="button" disabled>Redo</button>
+          </div>
+        </section>
+
+        <div class="grid looper-grid">
+          <section class="card loop-clock-card">
+            <h3>Clock &amp; alignment</h3>
+            <label>Loop length <select id="loopLengthMode"><option value="first">First recording sets the length</option><option value="clock">Use BPM and bars</option></select></label>
+            <div class="row"><label>BPM <input id="loopBpm" type="number" min="30" max="240" step="0.1" value="90"></label><label>Bars <input id="loopBars" type="number" min="1" max="32" value="4"></label><label>Beats/bar <select id="loopMeter"><option>4</option><option>3</option><option>6</option></select></label></div>
+            <label>Microphone alignment <span class="loop-inline"><input id="loopLatency" type="number" min="-500" max="1000" step="1" value="0"> ms</span></label>
+            <p class="note">Positive values move a late microphone recording earlier. Sessions can be up to 3 minutes. Use headphones to prevent the loop playing through the microphone.</p>
+            <div class="row"><button class="btn" id="loopLoadSelected" type="button">Load selected file as layer</button><button class="btn ghost" id="loopNew" type="button">New session</button></div>
+          </section>
+
+          <section class="card loop-comp-card">
+            <h3>Take comping</h3>
+            <p class="note">Each cycle is kept as a separate take. Choose a time range, then add the best takes to the mixer; ranges can overlap to build a comp.</p>
+            <div class="row"><label>From <input id="compStart" type="number" min="0" step="0.01" value="0"></label><label>To <input id="compEnd" type="number" min="0" step="0.01" value="0"></label></div>
+            <div id="loopTakes" class="loop-takes"><p>No takes recorded yet.</p></div>
+          </section>
+
+          <section class="card wide loop-mixer-card">
+            <div class="loop-section-head"><div><h3>Mixer</h3><p class="note">Up to 8 synchronized layers. Mute, solo, level and pan update while the loop plays.</p></div><span id="loopTrackCount">0 / 8 layers</span></div>
+            <div id="loopTracks" class="loop-tracks"><p class="loop-empty">Record a layer or load the selected file.</p></div>
+          </section>
+
+          <section class="card loop-ai-card">
+            <h3>Add AI instrument</h3>
+            <p class="note">Analyses the current mix for tempo, key and chords, then creates an exact-length synchronized stem. The built-in provider works offline; its API contract can be replaced by MusicGen, Stable Audio or Suno.</p>
+            <label>Describe the layer <input id="loopAiPrompt" type="text" value="add a funky bassline" maxlength="240"></label>
+            <div class="row"><button class="btn primary" id="loopAiAdd" type="button">Add AI instrument</button><span id="loopAnalysis"></span></div>
+          </section>
+
+          <section class="card loop-export-card">
+            <h3>Export</h3>
+            <p class="note">Exports exactly one loop cycle with mixer mute, solo, volume and pan applied. Track Export buttons save the individual processed stem.</p>
+            <div class="row"><label>Format <select id="loopExportFormat"><option value="wav">WAV</option><option value="mp3">MP3 · 256 kbps</option></select></label><button class="btn primary" id="loopExportMaster" type="button">Export master mix</button></div>
+          </section>
         </div>
       </div>
 
@@ -447,5 +499,6 @@
 <script src="vendor/wavesurfer.min.js"></script>
 <script src="vendor/regions.min.js"></script>
 <script src="app.js"></script>
+<script src="looper.js"></script>
 </body>
 </html>
